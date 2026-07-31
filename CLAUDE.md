@@ -1,52 +1,42 @@
 # CLAUDE.md
 
-This repo hosts personal Claude Code skills. It currently has one:
-`skills/code-researcher/SKILL.md`, a workflow for investigating codebases with
-search tools instead of reading files at random. See `README.md` for the
-install/symlink story.
+This repo is a personal collection of Claude Code skills — not an application.
+There's no build, no tests, no runtime; the deliverable is the Markdown itself.
 
-## Mandatory tooling policy
+## Layout
 
-This applies whenever you (Claude) are exploring, searching, or reading code —
-in this repo or any other. It is not optional and not limited to when the
-`code-researcher` skill is explicitly invoked.
+```
+skills/<skill-name>/SKILL.md
+```
 
-| Task | Use | Never |
-|---|---|---|
-| Repo/directory overview | `tree -L 2 -I '.git\|node_modules\|build\|dist\|target'` | recursive `ls` |
-| Find files by name/extension/age | `fd` | `find` |
-| Search file contents | `rg` | `grep` |
-| Match/rewrite code by shape (calls, defs, JSX, imports) | `ast-grep` | regex-based `sed`/`perl` rewrites |
-| Query JSON | `jq` | ad hoc parsing |
-| Query YAML | `yq` | ad hoc parsing |
-| Read a known file | the `Read` tool | `cat`, pager-backed commands |
+Each skill is a self-contained directory under `skills/`, named to match its
+frontmatter `name:` field (Claude Code requires this). Currently there's one:
+`code-researcher`.
 
-Full flag reference, gotchas, and worked combinations live in
-[`skills/code-researcher/SKILL.md`](skills/code-researcher/SKILL.md) — treat it
-as the source of truth, not this summary.
+## Editing a skill
 
-Rules, not suggestions:
+- `SKILL.md`'s frontmatter `description:` is what Claude Code matches against
+  to decide when to load the skill — when you change what a skill covers,
+  update `description` too, or it stops triggering on the cases you just added.
+- `README.md` documents the same skill for humans (prerequisites, install
+  instructions, a shorter summary of the method) at the project root. It's a
+  separate audience from `SKILL.md`, so it drifts independently — when you
+  change what a skill *does*, check whether the README's summary or
+  prerequisites table needs the same update.
+- New skills follow the same pattern: `skills/<name>/SKILL.md` with `name` and
+  `description` frontmatter, a section in the root `README.md`, and an entry in
+  the "Should this be a plugin?" section's trigger condition (a second skill is
+  explicitly called out there as the point to reconsider plugin packaging).
 
-- **`rg` for text, `ast-grep` for structure.** Reach for `ast-grep` the moment a
-  regex would need to care about whitespace, line breaks, nesting, or balanced
-  parens.
-- **Orient before searching.** Run `tree` on an unfamiliar directory before
-  reaching for `rg`/`fd` — it's cheaper than a blind search.
-- **Cast wide, then narrow.** `rg -l` / `rg -c` before printing match bodies;
-  400 hits means narrow the query, not read all 400.
-- **If a preferred tool is missing, say so before falling back** to a noisier
-  substitute — don't silently degrade.
-- **Save reusable searches.** The moment a command is worth running a second
-  time, save it as a parameterized script in `.scripts/` (create the directory
-  if needed) instead of retyping it with slight variations.
-- **Report findings as `path/to/file.ts:42`** — clickable, and lets the reader
-  jump straight to the line.
+## Testing a change
 
-## Editing this repo
+There's no test suite — verification is starting a new Claude Code session
+(skills load at session start, not mid-session) and either invoking the skill
+by name (`/code-researcher`) or issuing a prompt that should trigger its
+`description`.
 
-- `skills/code-researcher/SKILL.md` is the skill Claude Code actually loads —
-  keep its frontmatter `name`/`description` accurate, since `description` is
-  what triggers the skill.
-- `README.md` documents the same tools at a higher level for humans (install
-  instructions, prerequisites). When the tool list or method in `SKILL.md`
-  changes, check whether `README.md` needs the same update.
+## Scope of this file
+
+Tool-usage rules (rg vs grep, ast-grep vs sed, etc.) belong inside the relevant
+`SKILL.md`, not here — that's the artifact Claude Code actually loads when
+those rules need to apply. Don't duplicate them into this file.
