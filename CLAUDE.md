@@ -1,42 +1,21 @@
-# CLAUDE.md
+```md
+# Tool Availability and Fallbacks
 
-This repo is a personal collection of Claude Code skills — not an application.
-There's no build, no tests, no runtime; the deliverable is the Markdown itself.
+Before assuming any repository-inspection tool exists, run:
 
-## Layout
-
-```
-skills/<skill-name>/SKILL.md
+```sh
+command -v tree fd rg ast-grep jq yq
 ```
 
-Each skill is a self-contained directory under `skills/`, named to match its
-frontmatter `name:` field (Claude Code requires this). Currently there's one:
-`code-researcher`.
+If a preferred tool is unavailable, explicitly say so before using its fallback. Never silently degrade to a noisier or less safe command.
 
-## Editing a skill
+## Required Tool Fallbacks
 
-- `SKILL.md`'s frontmatter `description:` is what Claude Code matches against
-  to decide when to load the skill — when you change what a skill covers,
-  update `description` too, or it stops triggering on the cases you just added.
-- `README.md` documents the same skill for humans (prerequisites, install
-  instructions, a shorter summary of the method) at the project root. It's a
-  separate audience from `SKILL.md`, so it drifts independently — when you
-  change what a skill *does*, check whether the README's summary or
-  prerequisites table needs the same update.
-- New skills follow the same pattern: `skills/<name>/SKILL.md` with `name` and
-  `description` frontmatter, a section in the root `README.md`, and an entry in
-  the "Should this be a plugin?" section's trigger condition (a second skill is
-  explicitly called out there as the point to reconsider plugin packaging).
-
-## Testing a change
-
-There's no test suite — verification is starting a new Claude Code session
-(skills load at session start, not mid-session) and either invoking the skill
-by name (`/code-researcher`) or issuing a prompt that should trigger its
-`description`.
-
-## Scope of this file
-
-Tool-usage rules (rg vs grep, ast-grep vs sed, etc.) belong inside the relevant
-`SKILL.md`, not here — that's the artifact Claude Code actually loads when
-those rules need to apply. Don't duplicate them into this file.
+| Preferred tool | If unavailable |
+|---|---|
+| `tree` | State that `tree` is missing. Use `fd -t d -d 2 . \| head -50`; if `fd` is also unavailable, use `ls` one directory level at a time. |
+| `fd` | State that `fd` is missing. Use `find` with explicit pruning for `.git` and `node_modules`. |
+| `rg` | State that `rg` is missing. Use `grep -rn --exclude-dir={.git,node_modules,dist,build}`. |
+| `ast-grep` | State that `ast-grep` is missing. Use `rg` to find candidates, inspect each occurrence, and edit each site individually. Never use blind repository-wide `sed -i` replacements. |
+| `jq` | State that `jq` is missing. Use `node -e` or `python3 -c` to parse JSON structurally. |
+| `yq` | State that `yq` is missing. Use `python3 -c 'import yaml,sys;...'` when YAML support is available, or `rg -n -A3` only for a quick non-structural inspection. |
