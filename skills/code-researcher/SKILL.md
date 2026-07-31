@@ -1,6 +1,6 @@
 ---
 name: code-researcher
-description: Investigate unfamiliar or large codebases fast using ripgrep (rg), fd, ast-grep, and jq, saving reusable searches as scripts in a local .scripts/ folder. Use when locating where a symbol is defined or used, tracing call sites and data flow, auditing a pattern across many files, finding recently-changed files, comparing how something is done in two places, or answering "where is X" / "how does Y work" in a repo too big to read.
+description: Investigate unfamiliar or large codebases fast using tree, ripgrep (rg), fd, ast-grep, jq, and yq, saving reusable searches as scripts in a local .scripts/ folder. Use when locating where a symbol is defined or used, tracing call sites and data flow, auditing a pattern across many files, finding recently-changed files, comparing how something is done in two places, or answering "where is X" / "how does Y work" in a repo too big to read.
 ---
 
 # Code Researcher
@@ -13,18 +13,28 @@ then read those files properly.**
 
 | Question | Tool |
 |---|---|
+| What does this repo/directory look like at a glance? | `tree` |
 | Where does this *text* appear? | `rg` |
 | What files *exist* with this name/extension/age? | `fd` |
 | Where does this *code shape* appear (calls, defs, JSX, imports)? | `ast-grep` |
 | Something emitted JSON | `jq` |
+| Something is YAML (config, CI, compose) | `yq` |
 | I have <10 candidate files and need to understand them | the `Read` tool |
 
 Rule of thumb: **`rg` for text, `ast-grep` for structure.** Reach for `ast-grep`
 the moment a regex would need to care about whitespace, line breaks, nesting, or
 balanced parens — those are exactly the cases regex gets wrong.
 
+Never fall back to `find`, `grep`, recursive `ls`, or regex-based source rewrites
+when the purpose-built tool above applies — those produce noisier output and, for
+rewrites, are more likely to corrupt code. **If a preferred tool is missing, say so
+before falling back** (see Availability and fallbacks at the end).
+
 ## Method
 
+0. **Get oriented** with `tree -L 2 -I '.git|node_modules|build|dist|target'` (or
+   `-L 3` for a smaller repo) the first time you touch an unfamiliar directory —
+   cheaper than a blind search and it tells you where the code even lives.
 1. **Cast wide, cheaply.** `rg -l` / `rg -c` to see *which* and *how many* files
    are involved before printing any match bodies. A search that returns 400 hits
    is a signal to narrow, not to read 400 hits.
@@ -99,6 +109,17 @@ for src, n in counts.most_common(20):
 
 Captured metavariables live at `metaVariables.single.$NAME.text` for `$VAR` and
 under `metaVariables.multi` for `$$$VAR`.
+
+## tree
+
+Orientation before search, not a substitute for it. Limit depth and exclude
+generated/dependency/VCS directories or the output is useless noise.
+
+```bash
+tree -L 2 -I '.git|node_modules|build|dist|target|.gradle|.idea'   # shallow first pass
+tree -L 3 src                                                      # deeper, scoped to one dir
+tree -d -L 2                                                       # directories only
+```
 
 ## ripgrep (`rg`)
 
@@ -180,6 +201,17 @@ jq -s 'length' *.json                          # slurp multiple files
 
 `-r` gives raw strings (no quotes) — almost always what you want when piping onward.
 
+## yq
+
+Same idea as `jq`, for YAML — config files, CI pipelines, docker-compose. Don't
+regex your way through indentation-sensitive YAML.
+
+```bash
+yq '.services' docker-compose.yml
+yq '.jobs | keys' .github/workflows/ci.yml
+yq -o=json '.' config.yaml | jq '.database'   # convert to JSON mid-pipeline for jq
+```
+
 ## Combinations that do real work
 
 ```bash
@@ -204,3 +236,18 @@ rg -n '(function|const|class|interface|type)\s+MyThing\b'
 Read files with the `Read` tool, not a pager-backed command. Anything that may
 page or wait for input needs that disabled explicitly — `git --no-pager diff`,
 `git log | cat` — or it blocks forever.
+
+## Availability and fallbacks
+
+Check before assuming: `command -v tree fd rg ast-grep jq yq`. If a tool is
+missing, say so before falling back — don't silently degrade to a noisier
+command.
+
+| Preferred | If missing, state that, then |
+|---|---|
+| `tree` | `fd -t d -d 2 . \| head -50`, or `ls` one level at a time |
+| `fd` | `find` with an explicit `-path` prune for `node_modules`/`.git` |
+| `rg` | `grep -rn --exclude-dir={.git,node_modules,dist,build}` |
+| `ast-grep` | `rg` to locate matches, then edit each site individually — never a blind `sed -i` across files |
+| `jq` | `node -e` / `python3 -c` to parse the JSON |
+| `yq` | `python3 -c 'import yaml,sys;...'`, or `rg -n -A3` for a quick peek |
