@@ -1,4 +1,3 @@
-```md
 # Tool Availability and Fallbacks
 
 Before assuming any repository-inspection tool exists, run:
