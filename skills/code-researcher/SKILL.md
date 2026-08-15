@@ -1,6 +1,6 @@
 ---
 name: code-researcher
-description: Investigate unfamiliar or large codebases fast using tree, ripgrep (rg), fd, ast-grep, jq, and yq, saving reusable searches as scripts in a local .scripts/ folder. Includes a bundled script that turns a keyword into a ranked reading list for Java/Kotlin repos. Use when locating where a symbol is defined or used, tracing call sites and data flow, auditing a pattern across many files, finding recently-changed files, comparing how something is done in two places, deciding which files to read first in a Gradle/Maven project, or answering "where is X" / "how does Y work" in a repo too big to read.
+description: Investigate unfamiliar or large codebases fast using tree, ripgrep (rg), fd, ast-grep, jq, and yq, saving reusable searches as scripts in a local .scripts/ folder. Includes bundled scripts that turn a keyword into a ranked reading list for Java/Kotlin and TypeScript/JavaScript repos. Use when locating where a symbol is defined or used, tracing call sites and data flow, auditing a pattern across many files, finding recently-changed files, comparing how something is done in two places, deciding which files to read first in a Gradle/Maven or TypeScript project, or answering "where is X" / "how does Y work" in a repo too big to read.
 ---
 
 # Code Researcher
@@ -46,18 +46,21 @@ before falling back** (see Availability and fallbacks at the end).
 
 Report findings as `path/to/file.ts:42` — those are clickable.
 
-## Java/Kotlin: run the bundled script instead of steps 1-4
+## Java/Kotlin/TypeScript: run the bundled script instead of steps 1-4
 
-This skill ships with `scripts/search-jvm-sources.py`, which does the whole
-narrowing pass for JVM sources in one command. Invoke it by absolute path from
-this skill's own directory (the one holding `SKILL.md`) — it is *not* on `PATH`
-and it does not live in the repo being searched:
+This skill ships with two scripts that do the whole narrowing pass in one
+command — `scripts/search-jvm-sources.py` for `.java`/`.kt`/`.kts`, and
+`scripts/search-ts-sources.py` for `.ts`/`.tsx`/`.js`/`.jsx`. Same CLI, same
+flags, same output. Invoke by absolute path from this skill's own directory (the
+one holding `SKILL.md`) — they are *not* on `PATH` and do not live in the repo
+being searched:
 
 ```bash
 ~/.claude/skills/code-researcher/scripts/search-jvm-sources.py <keyword> [root]
+~/.claude/skills/code-researcher/scripts/search-ts-sources.py <keyword> [root]
 ```
 
-It prints a reading list of at most 100 files, grouped by why each one is on it:
+It prints a reading list of at most 200 files, grouped by why each one is on it:
 
 ```
 Reading list for 'mcp server' — 7 files, ~1,159 lines to read
@@ -93,17 +96,28 @@ guessing at exists in some other spelling. When nothing clears the bar, the erro
 names the closest identifiers in the repo, which answers the vocabulary-mismatch
 question directly.
 
-Flags worth knowing: `--depth 0` for direct hits only (3 hops by default),
+Flags worth knowing: `--depth 0` for direct hits only (5 hops by default),
 `--no-tests` to drop test sources (they are demoted and tagged `[test]`
 otherwise), `-n` to shorten the list, `--seeds` to widen the fan-out base,
 `--fuzzy` to move the similarity bar (0.8 default; `--fuzzy 0` for exact only).
 
-It needs `rg`; `fd` and `ast-grep` are used when present and it prints a notice
-before falling back without them. Type names come from `ast-grep` by node kind
-rather than regex — a comment reading "the record that ..." otherwise registers
-a type called `that`, which then fans out to every file using that word.
+**The TypeScript one follows the module graph.** A TS import names a file, not a
+type, so `search-ts-sources.py` resolves module specifiers to real paths and
+follows them both ways — what a seed imports and who imports it. `@/lib/auth`,
+`~/lib/auth` and `src/lib/auth` all resolve without reading tsconfig. Source
+roots are `src`/`app`/`lib`/test dirs at any depth, so monorepos work as-is. Only
+*exported* declarations become graph symbols, symbols spread across more than 20%
+of the repo are ignored as edges, and re-export-only `index.ts` barrels are
+demoted.
 
-For anything that isn't Java or Kotlin, use the method above.
+Both need `rg`; `fd` and `ast-grep` are used when present and each prints a notice
+before falling back. Declared names come from `ast-grep` by node kind rather than
+regex — a Java comment reading "the record that ..." otherwise registers a type
+called `that`, and in TS a regex cannot tell an exported symbol from a local
+`const res` inside an exported function.
+
+For anything that isn't Java, Kotlin, or TypeScript/JavaScript, use the method
+above.
 
 ## Search budget: three rounds, then ask
 
@@ -175,8 +189,9 @@ and quietly introduces typos that silently change the result.
   directory. **Create it yourself when it doesn't exist** (`mkdir -p .scripts`) —
   don't ask, don't fall back to running inline.
 - **Don't re-create what ships with this skill.** `scripts/search-jvm-sources.py`
-  already covers "which Java/Kotlin files should I read for X" — call it, don't
-  write a smaller version of it into `.scripts/`.
+  and `scripts/search-ts-sources.py` already cover "which files should I read for
+  X" in JVM and TS repos — call them, don't write a smaller version into
+  `.scripts/`.
 - **Check `.scripts/` before writing a new one.** The script you need may already
   be there; extend it rather than adding a near-duplicate. `ls .scripts/` is the
   fastest check — and note that `rg --files` and `fd` do **not** list `.scripts/`
