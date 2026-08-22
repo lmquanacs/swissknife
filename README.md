@@ -339,8 +339,8 @@ Discovery must answer at minimum:
 - Is there existing code that already does this, that I would be duplicating?
 - What is the convention here for <the kind of thing being added>?
   Look at three similar files, not one — one file might be the outlier.
-  On a JVM repo, check for Konsist or ArchUnit tests first — if the conventions
-  are already enforced as tests, those are the answer, and my change keeps them
+  Check the existing unit and integration tests first — if the conventions are
+  already enforced as tests, those are the answer, and my change keeps them
   green.
 - What is the blast radius of touching <symbol or module>?
 - Where do the tests for this area live?
