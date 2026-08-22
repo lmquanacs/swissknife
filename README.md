@@ -17,7 +17,9 @@ file that mattered, or it was buried under forty that didn't.
 - **Discover** — climb the cost ladder (structure → paths → text search →
   structural search → ranged reads → full reads), where each rung costs ~10× the
   one below. **`rg` for text, `ast-grep` for structure**; `fd` for files by name,
-  extension or age; `jq`/`yq` for anything structured.
+  extension or age; `jq`/`yq` for anything structured. `semgrep` is the one
+  escalation off the ladder — the only tool here with dataflow, for whether a
+  value *reaches* a sink rather than where a shape appears.
 - **Reflect** — the phase that gets skipped. Write a ledger of question →
   status → evidence after each round. **Three rounds per open question**, then
   either ask a question that carries the search, or log it as an open question.
@@ -34,7 +36,7 @@ a parameterized script instead of retyped with slight variations every pass.
 Source: [`skills/context-builder/SKILL.md`](skills/context-builder/SKILL.md).
 The body stays under 500 lines; the detail lives in `references/` and loads only
 when needed — [`tool-cookbook.md`](skills/context-builder/references/tool-cookbook.md)
-(tool flags, `ast-grep` gotchas, fallbacks, `.scripts/`),
+(tool flags, `ast-grep` gotchas, Semgrep taint mode, fallbacks, `.scripts/`),
 [`discovery-recipes.md`](skills/context-builder/references/discovery-recipes.md)
 (search patterns by question type), and
 [`pack-templates.md`](skills/context-builder/references/pack-templates.md)
@@ -180,6 +182,24 @@ brew install ripgrep fd ast-grep jq yq tree
 Note that ast-grep's binary is `ast-grep`. It also ships an `sg` alias, but that
 one is deprecated and prints a warning on every invocation.
 
+One optional escalation, not assumed present:
+
+| Tool | Purpose |
+|---|---|
+| [Semgrep](https://semgrep.dev/) (`semgrep`) | dataflow and taint — the question `ast-grep` can't answer |
+
+```bash
+brew install semgrep
+```
+
+The skill checks for it only when a flow question comes up, and logs that
+question as open if it's missing. Regex is not a fallback for dataflow.
+
+[Konsist](https://docs.konsist.lemonappdev.com/) (Kotlin) and
+[ArchUnit](https://www.archunit.org/) (Java) aren't installed — they're *found*.
+When a JVM repo already encodes layering and naming as tests, those tests are
+the conventions, and get read rather than inferred from sample files.
+
 ## Installing the skill
 
 Claude Code discovers skills in two places: `~/.claude/skills/` (available in
@@ -288,6 +308,9 @@ Where I think it lives (may be wrong): <path or subsystem, or "no idea">
 Frame the questions first, then discover. Budget: Standard.
 Search the literal error string before anything else, and walk the value
 backward to its write site rather than forward from the symptom.
+If the trail turns into "does this value actually reach that call", stop
+regexing and write a throwaway `semgrep` taint rule scoped to the package. If
+semgrep isn't installed, say so and leave that question open.
 
 Give me back:
 - a ledger: question / status / evidence
@@ -316,6 +339,9 @@ Discovery must answer at minimum:
 - Is there existing code that already does this, that I would be duplicating?
 - What is the convention here for <the kind of thing being added>?
   Look at three similar files, not one — one file might be the outlier.
+  On a JVM repo, check for Konsist or ArchUnit tests first — if the conventions
+  are already enforced as tests, those are the answer, and my change keeps them
+  green.
 - What is the blast radius of touching <symbol or module>?
 - Where do the tests for this area live?
 
@@ -352,6 +378,9 @@ I care most about: <correctness / performance / security / API surface / all>
 
 Start from `git diff --stat` and `git log --oneline -8` on the touched paths.
 For every changed file, find its callers before judging the change. Budget: Standard.
+If I said security above, run semgrep taint mode over the touched paths first:
+an issue: (security) has to name a source, a sink, and the path between them.
+No semgrep on PATH — say so, and those comments are question:, not issue:.
 
 Give me back, in this order:
 1. What changed — the diff summarized, no opinions yet
@@ -413,6 +442,8 @@ Count before you read:
 - `rg -cw '<symbol>'` for where it concentrates
 - `ast-grep` for the structural sites — not regex, so multi-line calls aren't
   missed and matches inside comments and strings aren't counted
+- `rg -l 'Konsist\.scopeFrom|archunit'` on a JVM repo — architecture rules are
+  constraints on the refactor, not tests to fix afterwards
 
 If the blast radius is over ~15 files, stop and give me the number instead of
 reading them all — that count is itself the finding. Budget: Deep.
@@ -422,7 +453,8 @@ Give me back:
 - every site grouped by the kind of change it needs — mechanical / needs
   thought / ambiguous — each as a `path:line` anchor
 - the interface or contract that pins the current shape, quoted exactly
-- what test coverage already exists over the affected sites
+- what test coverage already exists over the affected sites, plus any
+  Konsist/ArchUnit rule the refactor would violate, quoted
 - Open questions for any site you cannot classify
 
 Then propose an edit order, safest first. Don't start editing.
@@ -450,7 +482,9 @@ the manifest through jq/yq, recently-changed files — then anchor out from the
 entry point. Budget: Deep, but stop early if the map converges sooner.
 
 Read interfaces, types, and configs. Skip tests and implementation bodies unless
-a behavior is documented nowhere else.
+a behavior is documented nowhere else. Exception on JVM repos: Konsist or
+ArchUnit tests are the architecture written as code — read them, and cite them
+[verified], because they're enforced rather than observed.
 
 Give me back:
 - a Map: `path` plus one line each, for every component that earns a mention
@@ -485,6 +519,9 @@ Write two files, because they have different lifespans:
   self-contained, assuming no shared history.
 - **Two keywords, one question** — *"where do auth and retry meet"* is a single
   run: `search-ts-sources.py auth retry --all`.
+- **A flow or security question** — append: *"Write a throwaway semgrep taint
+  rule rather than more grep rounds. If semgrep isn't installed, tell me instead
+  of inferring the flow."*
 
 ## Should this be a plugin?
 

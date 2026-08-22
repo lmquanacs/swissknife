@@ -21,6 +21,9 @@ I care most about: <correctness / performance / security / API surface / all>
 
 Start from `git diff --stat` and `git log --oneline -8` on the touched paths.
 For every changed file, find its callers before judging the change. Budget: Standard.
+If I said security above, run `semgrep` taint mode over the touched paths first:
+an `issue: (security)` has to name a source, a sink, and the path between them.
+No semgrep on PATH — say so, and those comments are `question:`, not `issue:`.
 
 Give me back, in this order:
 1. What changed — the diff summarized, no opinions yet

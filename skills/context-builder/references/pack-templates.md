@@ -58,7 +58,7 @@ is the diff, not the state.
 ```
 
 Rule: if it was in the previous pack and hasn't changed, it does not reappear.
-Repetition across turns is pure token waste and it dilutes what's actually new.
+Repetition across turns is pure token waste, and it dilutes what is new.
 
 ---
 
@@ -99,11 +99,11 @@ memory — a version you half-remember is a constraint the receiving agent will
 violate. Same for **Excerpts**: paste what `ast-grep` matched, not what you
 recall the signature being.
 
-The **Traps** section carries the most value per token in the whole template —
-it is the only part the receiving agent cannot rediscover cheaply, because it
-encodes dead ends they would otherwise walk into themselves. A search that
-returned nothing belongs here too: "`rg -lw 'sessionToken'` is empty; the
-concept is spelled `authToken`" saves the next agent the same empty search.
+**Traps** carries the most value per token in the template: it is the only part
+the receiving agent cannot rediscover cheaply, because it encodes dead ends they
+would otherwise walk into. A search that returned nothing belongs here too:
+"`rg -lw 'sessionToken'` is empty; the concept is spelled `authToken`" saves the
+next agent the same empty search.
 
 ---
 
@@ -156,10 +156,9 @@ cache reuse: stable material first, volatile last.
 ```
 
 Editing anything in the stable prefix invalidates every cached token after it,
-so treat the prefix as append-only-at-the-end and frozen elsewhere. Build it
-once, from `tree` for the map and `ast-grep -k` for the signatures, and accept
-that it is slightly over-complete — a stable prefix that survives fifty turns is
-worth more than a minimal one you have to keep amending.
+so treat the prefix as frozen. Build it once — `tree` for the map, `ast-grep -k`
+for the signatures — and let it run slightly over-complete. A prefix that
+survives fifty turns beats a minimal one you keep amending.
 
 When the volatile suffix grows past roughly a third of the pack, compress it:
 fold settled findings up into the stable section as one-line facts, and clear

@@ -15,6 +15,9 @@ Where I think it lives (may be wrong): <path or subsystem, or "no idea">
 Frame the questions first, then discover. Budget: Standard.
 Search the literal error string before anything else, and walk the value
 backward to its write site rather than forward from the symptom.
+If the trail turns into "does this value actually reach that call", stop
+regexing and write a throwaway `semgrep` taint rule scoped to the package. If
+semgrep isn't installed, say so and leave that question open.
 
 Give me back:
 - a ledger: question / status / evidence

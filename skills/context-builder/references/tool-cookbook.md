@@ -10,6 +10,7 @@ section you need, not the whole file.
 - `fd` — file discovery
 - `ast-grep` — structural search (**start at "the four gotchas"** when a pattern
   returns nothing)
+- Semgrep — the escalation from `ast-grep`, for dataflow and taint
 - `jq` — JSON
 - `yq` — YAML
 - Combinations that do real work
@@ -21,7 +22,7 @@ section you need, not the whole file.
 
 Investigation is repetitive: the same search gets re-run with a tweaked pattern, a
 wider glob, a different directory. Retyping a long pipeline each time burns turns
-and quietly introduces typos that silently change the result.
+and introduces typos that silently change the result.
 
 **Rule: the moment a command is worth running a second time, it belongs in a script.**
 
@@ -237,9 +238,9 @@ ast-grep run -p '$A ?: $B' -l kotlin                     # elvis / default-value
 ```
 
 - Kotlin is the **strictest of the three about signatures**. `fun $N($$$) { $$$ }`
-  matches only a plain block-bodied fun with no return type — it misses
-  `suspend fun`, `fun f(): T`, *and* expression bodies (`fun f() = expr`, which needs
-  `fun $N($$$) = $EXPR`). Writing one pattern per shape is a losing game; reach for
+  matches only a plain block-bodied fun with no return type. It misses
+  `suspend fun`, `fun f(): T`, and expression bodies — `fun f() = expr` needs
+  `fun $N($$$) = $EXPR`. Writing one pattern per shape is a losing game; reach for
   `-k function_declaration` and filter the results, or use an inline rule.
 - **A `catch` clause does not parse on its own** — write the whole `try { $$$ } catch
   (...) { }`. A bare `catch ($E: $T) { }` pattern parses as a call to a function named
@@ -287,6 +288,69 @@ ast-grep run -p 'foo($A, $B)' --rewrite 'foo($B, $A)' -l ts -U   # write to disk
 
 Metavariables carry into the rewrite by name, so a capture you didn't reuse is
 silently dropped — read the previewed diff, don't skim the match count.
+
+## Semgrep — the escalation from ast-grep
+
+`ast-grep` answers *where does this shape appear*. Semgrep answers *does this
+value reach that call* — dataflow, which `ast-grep` has none of. Use it for flow
+questions only; it costs seconds to minutes per run against `ast-grep`'s
+milliseconds. `brew install semgrep`.
+
+```bash
+semgrep --version                        # confirm it's here before planning around it
+semgrep -e '$X.execute($Q)' -l kotlin .  # one-off pattern, no rule file
+semgrep --config rules.yaml src/ --json  # local rules, scoped to a path
+semgrep --config p/security-audit . --metrics off   # registry ruleset
+```
+
+Syntax overlaps `ast-grep` but isn't the same. Metavariables are `$X` in both;
+the wildcard is `...`, not `$$$`. `...` also spans *statements*, which is the
+part `ast-grep` can't express:
+
+```
+foo(...)                         # any arguments, ast-grep's foo($$$)
+$X = source(); ...; sink($X)     # anything in between, same function body
+<... $X ...>                     # $X anywhere inside this expression, any depth
+```
+
+### Taint mode — the actual reason to reach for it
+
+```yaml
+# taint.yaml — untrusted request data reaching a raw query
+rules:
+  - id: request-to-raw-query
+    languages: [kotlin]
+    severity: WARNING
+    message: request value reaches execute() unsanitized
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.queryParam(...)
+    pattern-sanitizers:
+      - pattern: sanitize(...)
+    pattern-sinks:
+      - pattern: $DB.execute(...)
+```
+
+```bash
+semgrep --config taint.yaml src/ --json --metrics off \
+  | jq -r '.results[] | "\(.path):\(.start.line) \(.extra.message)"'
+```
+
+That emits `path:line` anchors in the pack's format — a taint finding drops
+into Findings unedited.
+
+Three limits, before you trust a clean run:
+
+- **Open-source Semgrep is single-file.** Taint doesn't cross files (cross-file
+  is paid). "No findings" means "none within any one file", not "the flow is
+  safe" — report which one you mean.
+- **Registry configs (`p/…`, `r/…`, `--config auto`) hit the network** and send
+  metrics. Use a local rule file or pass `--metrics off`.
+- **Scope it to a path while iterating.** Repo root is for the final run.
+
+`--json` to pipe, `--sarif` if something downstream eats it, `--severity ERROR`
+to cut noise. Semgrep's `--json` line numbers are **1-indexed**, unlike
+`ast-grep --json` — don't apply that +1 twice.
 
 ## jq
 
@@ -351,3 +415,8 @@ command.
 | `ast-grep` | `rg` to locate matches, then edit each site individually — never a blind `sed -i` across files |
 | `jq` | `node -e` / `python3 -c` to parse the JSON |
 | `yq` | `python3 -c 'import yaml,sys;...'`, or `rg -n -A3` for a quick peek |
+
+**Semgrep is not in that table on purpose.** It's an escalation, so its absence
+isn't a fallback situation. Check `command -v semgrep` only once a flow question
+comes up; if it's missing, log that question as open. Regex is not a fallback
+for dataflow.

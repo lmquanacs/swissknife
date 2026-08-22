@@ -33,6 +33,10 @@ Three habits do most of the saving, and they are what the recipes are built on:
   care about line breaks, nesting, or balanced parens, it is the wrong tool —
   `rg '\.method\('` misses calls split across lines and matches them inside
   comments and strings.
+- **`ast-grep` for shape, Semgrep for flow.** `ast-grep` finds where a shape
+  appears; only Semgrep's taint mode tells you whether a value *reaches* a
+  sink. It's an escalation, not one of the six — check `command -v semgrep`
+  when a flow question comes up, not before.
 - **Don't re-exclude what's already excluded.** `rg` and `fd` honour
   `.gitignore`, so `node_modules`, `dist`, `build`, and `target` are out by
   default. Adding `-g '!**/node_modules/**'` is noise; reach for `-uu` (rg) or
@@ -69,6 +73,11 @@ rg -lw 'ClassName'                                # dependents, by file count fi
 
 If call sites exceed ~15, the thing is infrastructure — read its contract, not
 its consumers. Sample two call sites at most.
+
+> These find call sites; they can't tell you whether a value *reaches* one. For
+> "does this untrusted input get to that sink", write a throwaway Semgrep taint
+> rule (`tool-cookbook.md`) instead of another `rg` round. Flow questions only —
+> for shape, `ast-grep` is orders of magnitude faster.
 
 ## Recipe 3 — Where is this configured?
 
@@ -121,6 +130,17 @@ Three similar files, skimmed for structure, beats one file read closely. The
 config and CONTRIBUTING files state conventions directly and cost almost
 nothing — check them before inferring anything.
 
+On JVM repos, the conventions may already be executable:
+
+```bash
+rg -l 'Konsist\.scopeFrom|com\.tngtech\.archunit'   # Kotlin / Java arch tests
+```
+
+Konsist (Kotlin) and ArchUnit (Java) tests state layering, naming, and package
+boundaries as code that runs — the answer to this recipe, and the tests your
+change has to keep green. Read them before the three sample files, and cite them
+`[verified]`: they're enforced, not observed.
+
 > Two `fd` gotchas: the pattern comes first and the path second, so `fd -e ts src`
 > searches the *current* directory for files named `src` — you want `fd -e ts . src`.
 > And `-g` takes one value; a second `-g` is parsed as a search path. Put the
@@ -133,9 +153,12 @@ rg -lw 'SymbolName' | wc -l              # blast radius as a number
 rg -cw 'SymbolName'                      # per-file counts — where it concentrates
 git log --oneline -8 -- <path>           # is this hot or frozen?
 rg -lw 'SymbolName' -g '**/*test*'       # existing coverage
+rg -l 'Konsist\.scopeFrom|archunit'      # JVM: arch rules that will fail the change
 ```
 
-Count first, read second. If the blast radius is large, that count *is* the
+Count first, read second. Architecture tests are cheaper to read than to trip:
+a Konsist rule pinning a package boundary constrains the refactor, it isn't a
+test you fix afterwards. If the blast radius is large, that count *is* the
 finding — record it and don't read all the sites.
 
 ## Recipe 7 — Unfamiliar repo, no anchor
@@ -172,7 +195,7 @@ them. Then switch to anchor-out.
   interface is enough
 
 Most of this list is excluded for free: `rg` and `fd` skip anything in
-`.gitignore`, so the discipline you actually need is not re-adding it with `-uu`.
+`.gitignore`, so the only discipline needed is not re-adding it with `-uu`.
 
 ## Cost reference
 
@@ -183,6 +206,7 @@ Rough order of magnitude, for budgeting:
 | `tree -L 2` | 100–300 |
 | `rg -l` / `rg -c` across a repo | 50–200 |
 | `ast-grep run -p` across a repo | 100–400 |
+| `semgrep` taint rule over one package | 200–800, plus 5–60s of waiting |
 | `jq`/`yq` on one manifest key | 50–150 |
 | `rg -n -C3` with ~20 hits | 400–800 |
 | Ranged read, 40 lines | 400–600 |

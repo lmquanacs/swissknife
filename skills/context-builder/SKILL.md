@@ -1,6 +1,6 @@
 ---
 name: context-builder
-description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, or cost per task, or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
+description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode for dataflow questions) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or architecture-rule tests (Konsist, ArchUnit), or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
 ---
 
 # Context Builder
@@ -73,6 +73,7 @@ you don't yet know what you're looking for, and any file you open is a guess.
 | Where does this *text* appear? | `rg` |
 | What files *exist* with this name, extension, or age? | `fd` |
 | Where does this *code shape* appear (calls, defs, JSX, imports)? | `ast-grep` |
+| Does a value *reach* a sink (flow, not shape)? | `semgrep` taint mode |
 | Something emitted JSON | `jq` |
 | Something is YAML (config, CI, compose) | `yq` |
 | I have <10 candidate files and need to understand them | the `Read` tool |
@@ -85,9 +86,15 @@ purpose-built tool applies. Check availability once per session with
 `command -v tree fd rg ast-grep jq yq`, and **if a preferred tool is missing, say
 so before falling back** rather than silently degrading to a noisier command.
 
+**Semgrep is the escalation above both** — the only tool here with dataflow, for
+whether a value *reaches* something rather than where a shape appears. It isn't
+one of the six: check `command -v semgrep` only when a flow question comes up,
+and log that question as open if it's absent.
+
 `references/tool-cookbook.md` has the flags, the per-language `ast-grep` gotchas,
-the fallback table, and the `.scripts/` convention for searches you'll re-run.
-Open it when a search comes back empty or you're about to retype a long pipeline.
+Semgrep taint mode, the fallback table, and the `.scripts/` convention for
+searches you'll re-run. Open it when a search comes back empty or you're about
+to retype a long pipeline.
 
 ### Climb the ladder
 
@@ -135,19 +142,19 @@ ${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py <keyword>... [root]
 ${CLAUDE_SKILL_DIR}/scripts/search-ts-sources.py <keyword>... [root]
 ```
 
-The output is a reading list of at most 200 files, tiered **READ FIRST / THEN /
-SKIM IF NEEDED** by how each file was found, numbered in reading order, with a
-line count per tier so you know what you're signing up for. Read top-down and
-stop when the question is answered — the tiers exist so that stopping early is
-safe.
+The output is a reading list, at most 200 files, numbered in reading order and
+tiered **READ FIRST / THEN / SKIM IF NEEDED** by how each file was found. Every
+tier carries a line count, so you know what you're signing up for. Read
+top-down and stop when the question is answered — the tiers are what make
+stopping early safe.
 
-Each row carries its own evidence, so most files can be triaged without being
-opened: the matched source line, the relation that pulled the file in
-(`implements X`, `calls X`, `renders X` — subtyping and calls rank above a bare
-mention, so "who implements this interface" answers itself), a mention count,
-the file's test attached to its subject, and `changed with` when git history
-keeps moving two files together — which finds the migration or config that no
-type reference points at. `--json` carries all of it per file.
+Every row carries its own evidence, so most files can be triaged without being
+opened. Each shows the matched source line, a mention count, the file's test
+attached to its subject, and the relation that pulled it in — `implements X`,
+`calls X`, `renders X`. Subtyping and calls outrank a bare mention, so "who
+implements this interface" answers itself. A `changed with` row means git
+history keeps moving the two files together, which is what finds the migration
+or config no type reference points at. `--json` carries all of it per file.
 
 Three properties make this the right first move rather than a fallback:
 
@@ -328,6 +335,8 @@ Drop empty sections rather than writing "N/A". For Micro-tier tasks, Objective
 | Pasting large excerpts | Anchor + one-line claim |
 | Chasing every new identifier | Chase only what an open question depends on |
 | Investigating an adjacent problem you spotted | One line at the end, after the answer |
+| Regexing toward a dataflow answer | A Semgrep taint rule, or log it open |
+| Inferring JVM conventions from sample files | Read the Konsist/ArchUnit tests — they're enforced |
 | Silently guessing a gap | Log it under Open questions |
 | One pack for a sprawling task | Split the task, one pack each |
 | Re-reading a file already in context | Cite what you already have |
@@ -335,8 +344,9 @@ Drop empty sections rather than writing "N/A". For Micro-tier tasks, Objective
 ## Reference files
 
 - `references/tool-cookbook.md` — flags and recipes for `rg`, `fd`, `ast-grep`,
-  `jq`, `yq`, `tree`; the four `ast-grep` gotchas and per-language patterns; the
-  fallback table; and the `.scripts/` convention for reusable searches.
+  `jq`, `yq`, `tree`; the four `ast-grep` gotchas and per-language patterns;
+  Semgrep taint mode; the fallback table; and the `.scripts/` convention for
+  reusable searches.
 - `references/discovery-recipes.md` — Phase 2 search patterns by question type
   (data flow, config resolution, error origin, convention discovery), plus the
   files that are almost never worth reading and a cost reference.

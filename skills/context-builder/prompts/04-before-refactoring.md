@@ -16,6 +16,8 @@ Count before you read:
 - `rg -cw '<symbol>'` for where it concentrates
 - `ast-grep` for the structural sites — not regex, so multi-line calls aren't
   missed and matches inside comments and strings aren't counted
+- `rg -l 'Konsist\.scopeFrom|archunit'` on a JVM repo — architecture rules are
+  constraints on the refactor, not tests to fix afterwards
 
 If the blast radius is over ~15 files, stop and give me the number instead of
 reading them all — that count is itself the finding. Budget: Deep.
@@ -25,7 +27,8 @@ Give me back:
 - every site grouped by the kind of change it needs — mechanical / needs
   thought / ambiguous — each as a `path:line` anchor
 - the interface or contract that pins the current shape, quoted exactly
-- what test coverage already exists over the affected sites
+- what test coverage already exists over the affected sites, plus any
+  Konsist/ArchUnit rule the refactor would violate, quoted
 - Open questions for any site you cannot classify
 
 Then propose an edit order, safest first. Don't start editing.
