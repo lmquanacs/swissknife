@@ -236,6 +236,219 @@ If it doesn't show up, check that the file is at
 `~/.claude/skills/context-builder/SKILL.md` (the directory name and the `name:`
 field in the frontmatter should match) and that the YAML frontmatter is intact.
 
+## Use case prompt templates
+
+Five prompts for the situations the skill is built for. Each one names the skill
+so it loads, states a **budget tier** so it doesn't over-read, and asks for a
+specific **output shape** so what comes back is a briefing rather than a
+transcript of the search.
+
+Fill the `<angle brackets>` and delete any line that doesn't apply. The two lines
+that carry the most weight are the tier and the output shape — leave them out and
+Claude picks its own, and the default instinct is always "read more files."
+
+Every template ends by **writing its result to a markdown file**. That line is
+not decoration: a pack that only exists in scrollback has to be rebuilt from
+scratch next session, and rebuilding it costs the same tokens as building it did.
+Written to a file, it survives a `/clear`, gets read by the next agent for a few
+hundred tokens, and can be diffed as the work moves.
+
+Each template is also on disk as a standalone file, ready to copy whole:
+
+| # | Use | File |
+|---|---|---|
+| 1 | Debugging | [`prompts/01-before-debugging.md`](skills/context-builder/prompts/01-before-debugging.md) |
+| 2 | Planning and implementing | [`prompts/02-before-planning-implementing.md`](skills/context-builder/prompts/02-before-planning-implementing.md) |
+| 3 | Reviewing code | [`prompts/03-before-reviewing-code.md`](skills/context-builder/prompts/03-before-reviewing-code.md) |
+| 4 | Refactoring | [`prompts/04-before-refactoring.md`](skills/context-builder/prompts/04-before-refactoring.md) |
+| 5 | Documentation | [`prompts/05-for-documentation.md`](skills/context-builder/prompts/05-for-documentation.md) |
+
+| Tier | Reads | Use for |
+|---|---|---|
+| Micro | 1–3 files, ranges only | single-file edit, location already known |
+| Standard | 4–10 files | most debugging, most feature work, most reviews |
+| Deep | 10–25 files | architecture-wide refactors, documentation, audits |
+
+Anything that won't fit in Deep is too big for one pass — split it and run one
+prompt per piece.
+
+### 1. Before debugging
+
+Keeps the investigation from starting at the fix. The key constraint is the last
+line: a cause proposed before the ledger exists is a guess wearing evidence.
+
+```text
+Use context-builder before touching anything.
+
+Symptom: <what happens — paste the error verbatim if there is one>
+Expected: <what should happen instead>
+Repro: <steps, or the name of the failing test>
+Where I think it lives (may be wrong): <path or subsystem, or "no idea">
+
+Frame the questions first, then discover. Budget: Standard.
+Search the literal error string before anything else, and walk the value
+backward to its write site rather than forward from the symptom.
+
+Give me back:
+- a ledger: question / status / evidence
+- findings as `path:line` anchors, each labelled [verified] or [inferred]
+- the 2-3 most likely causes, ranked, each tied to a specific anchor
+- anything you could not determine, under Open questions
+
+Do not propose a fix in this turn, and do not open files that no question needs.
+
+Write the results to `debug-result.md`: the ledger, the findings, and the ranked
+causes. I want it on disk before we discuss the fix.
+```
+
+### 2. Before planning and implementing
+
+The "am I duplicating something" question is the one that pays for this prompt
+outright — it is also the one that never gets asked without prompting.
+
+```text
+Use context-builder, then plan. Don't write code in this turn.
+
+Goal: <the change, in one sentence>
+Constraints I already know: <versions, what must not break, style rules>
+
+Discovery must answer at minimum:
+- Is there existing code that already does this, that I would be duplicating?
+- What is the convention here for <the kind of thing being added>?
+  Look at three similar files, not one — one file might be the outlier.
+- What is the blast radius of touching <symbol or module>?
+- Where do the tests for this area live?
+
+Budget: Standard. Raise to Deep only if the blast radius count justifies it.
+
+Give me back a standard pack — Objective, Constraints, Map, Findings with
+`path:line`, Open questions, Not included — and then a numbered plan where
+every step cites an anchor from the Findings. Flag any step that rests on an
+[inferred] claim rather than a [verified] one.
+
+Write both to `plan-result.md` — the pack first, the plan after it. That file is
+what I'll hand back to you when we start implementing, so it has to stand alone.
+```
+
+### 3. Before reviewing code
+
+A diff read in isolation is the main source of confident-but-wrong review
+findings. This ordering forces the caller context to be gathered before any
+judgement is allowed.
+
+```text
+Use context-builder in review-pack mode: evidence before judgement.
+
+Under review: <PR number, branch, or `git diff main...HEAD`>
+What it claims to do: <the PR description, one line>
+I care most about: <correctness / performance / security / API surface / all>
+
+Start from `git diff --stat` and `git log --oneline -8` on the touched paths.
+For every changed file, find its callers before judging the change. Budget: Standard.
+
+Give me back, in this order:
+1. What changed — the diff summarized, no opinions yet
+2. The context each change lands in — `path:line` anchors for callers,
+   contracts, and the existing conventions the change should be matching
+3. Only then, findings: each one [verified], anchored, and stated as a
+   concrete failure scenario (input -> wrong output). No speculative findings.
+4. Open questions — things that need the author, not more searching.
+
+Write the review to `review-result.md`, all four sections, findings ordered
+most-severe first with a `path:line` anchor on each. If nothing survived
+verification, say that plainly rather than padding the file.
+```
+
+### 4. Before refactoring
+
+Refactors fail on the sites nobody found. Counting first is what stops the
+budget being spent reading site 4 of 60, and `ast-grep` is non-negotiable here —
+a regex misses calls split across lines and matches them inside comments.
+
+```text
+Use context-builder before any edit.
+
+Refactor: <from X to Y — rename, extract, change a signature, replace a pattern>
+Scope: <whole repo / this package / these paths>
+
+Count before you read:
+- `rg -lw '<symbol>' | wc -l` for the blast radius as a number
+- `rg -cw '<symbol>'` for where it concentrates
+- `ast-grep` for the structural sites — not regex, so multi-line calls aren't
+  missed and matches inside comments and strings aren't counted
+
+If the blast radius is over ~15 files, stop and give me the number instead of
+reading them all — that count is itself the finding. Budget: Deep.
+
+Give me back:
+- the blast radius count and the per-file concentration
+- every site grouped by the kind of change it needs — mechanical / needs
+  thought / ambiguous — each as a `path:line` anchor
+- the interface or contract that pins the current shape, quoted exactly
+- what test coverage already exists over the affected sites
+- Open questions for any site you cannot classify
+
+Then propose an edit order, safest first. Don't start editing.
+
+Write it to `refactor-result.md`: the blast radius count, the three site groups
+as a checklist I can tick through, and the edit order. Keep that file updated as
+edits land, so it doubles as the progress tracker.
+```
+
+### 5. For documentation
+
+The only one that starts top-down rather than anchor-out, because there is no
+anchor. The `[inferred]` labels matter more here than anywhere else — an inferred
+claim that ships in a doc becomes something the next person trusts.
+
+```text
+Use context-builder with top-down seeding — I have no anchor.
+
+Document: <what — a module, a service, the public API, onboarding for <area>>
+Audience: <new teammate / API consumer / future me>
+Length target: <e.g. one page>
+
+Orient first with the unfamiliar-repo sequence — tree, the directory histogram,
+the manifest through jq/yq, recently-changed files — then anchor out from the
+entry point. Budget: Deep, but stop early if the map converges sooner.
+
+Read interfaces, types, and configs. Skip tests and implementation bodies unless
+a behavior is documented nowhere else.
+
+Give me back:
+- a Map: `path` plus one line each, for every component that earns a mention
+- the public surface: exact signatures pulled with ast-grep, not paraphrased
+- configuration: the precedence order (default -> file -> env -> flag), which
+  matters more than any individual value
+- every claim labelled [verified] or [inferred] — I won't ship an [inferred]
+  claim without checking it myself
+- Open questions: what the code does not explain about itself
+
+Then draft the doc, with every factual claim traceable to an anchor above.
+
+Write two files, because they have different lifespans:
+- `<topic>.md` — the doc itself, clean prose, no labels, ready to ship
+- `doc-result.md` — the evidence behind it: the map, the anchors, and every
+  [inferred] claim I still need to verify. I delete this once the doc is checked.
+```
+
+### Adapting any of them
+
+- **JVM or TS/JS repo** — prepend: *"Run the bundled reading-list script first
+  (`~/.claude/skills/context-builder/scripts/search-ts-sources.py <keyword>`) and
+  triage from its evidence column before opening anything."* That replaces the
+  whole manual narrowing pass.
+- **Unsure of the vocabulary** — append: *"If my term returns zero hits, don't
+  try synonyms. Tell me the closest identifiers in the repo and ask."* Stops the
+  fourth-synonym spiral before it starts.
+- **Task already in progress** — swap the output shape for a delta pack: *"Only
+  what changed since the last pack: ledger, new findings, next action. Don't
+  restate anything we already established."*
+- **Handing off to another agent or a fresh session** — ask for a handoff pack:
+  self-contained, assuming no shared history.
+- **Two keywords, one question** — *"where do auth and retry meet"* is a single
+  run: `search-ts-sources.py auth retry --all`.
+
 ## Should this be a plugin?
 
 **Not yet — and deferring costs nothing.**
