@@ -56,26 +56,44 @@ one holding `SKILL.md`) — they are *not* on `PATH` and do not live in the repo
 being searched:
 
 ```bash
-~/.claude/skills/code-researcher/scripts/search-jvm-sources.py <keyword> [root]
-~/.claude/skills/code-researcher/scripts/search-ts-sources.py <keyword> [root]
+~/.claude/skills/code-researcher/scripts/search-jvm-sources.py <keyword>... [root]
+~/.claude/skills/code-researcher/scripts/search-ts-sources.py <keyword>... [root]
 ```
 
 It prints a reading list of at most 200 files, grouped by why each one is on it:
 
 ```
-Reading list for 'mcp server' — 7 files, ~1,159 lines to read
+Reading list for 'auth' — 24 files, ~3,447 lines to read
 
-READ FIRST (2 files, ~172 lines) — the keyword is named or declared here
-    1. java/dev/mcp/workspace/config/ServerConfig.java:86   1 mention, defines ServerConfig
-THEN (4 files, ~918 lines) — direct collaborators of the files above
-    3. java/dev/mcp/workspace/transport/HttpRunner.java:20  uses ServerConfig, uses ServerIdentity
-SKIM IF NEEDED (1 file, ~69 lines) — further out, reached through an on-topic type
-    7. java/dev/mcp/workspace/transport/McpError.java:11    uses McpServlet
+READ FIRST (11 files, ~1,177 lines) — the keyword is named or declared here
+    1. src/store/auth.ts:6              file name is the keyword, declares a matching symbol [20×]
+       interface AuthStore {
+       tested by __tests__/auth.test.ts
+    2. src/lib/config.ts:15             declares a matching symbol, imported by screens/SignInScreen.tsx
+       export const OAUTH_REDIRECT_URI = 'coldstart://auth';
+THEN (13 files, ~2,270 lines) — imported by / imports the files above
+   12. src/lib/tokenStore.ts:6          imported by store/auth.ts, changed with auth.ts (3×)
+SKIM IF NEEDED (1 file, ~69 lines) — further out, reached through an on-topic module
+   24. src/components/ChatInput.tsx:52  renders MentionSuggestions
+
+ALSO MENTIONED (2 config/resource files, not sources)
+       app.config.ts:1
 ```
 
 Read top-down and stop when the question is answered — the tiers exist so that
-stopping early is safe. `--json` gives the same data with `tier`, `hops`, `score`
-and `lines_total` per file for scripted use.
+stopping early is safe.
+
+Each row carries the evidence with it, so most files can be triaged without being
+opened: the **matched source line** under every READ FIRST entry, the **relation**
+that pulled a file in (`implements X`, `extends X`, `calls X`, `renders X`,
+`uses X` — subtyping and calls are ranked above a bare mention, so "who implements
+this interface" answers itself), a **mention count** (`[20×]`), the file's **test**
+attached to its subject rather than listed separately, and **`changed with`** when
+git history keeps moving two files in the same commit — which finds the migration
+or the config that no type reference points at. The trailer lists keyword hits in
+build files, manifests and resources: not code to read, but usually the fastest
+orientation there is. `--json` carries all of it per file (`tier`, `hops`, `score`,
+`lines_total`, `evidence`, `why`, `tests`, `cochange`) plus `config_mentions`.
 
 What it saves you from doing by hand: it searches only real source sets
 (`src/main/java`, `src/main/kotlin`, `test/…`, `commonMain/…`) so `build/`,
@@ -96,10 +114,27 @@ guessing at exists in some other spelling. When nothing clears the bar, the erro
 names the closest identifiers in the repo, which answers the vocabulary-mismatch
 question directly.
 
+**Several keywords narrow better than one long one.** `search-ts-sources.py auth
+retry --all` keeps only files carrying *both* and ranks them by the weaker one —
+"where do X and Y meet" in a single run instead of two runs and a manual diff.
+Without `--all` the keywords are unioned. When an `--all` run comes back empty it
+reports the per-keyword counts (`'auth': 40 files, 'retry': 0`), which is the
+answer, not a failure.
+
+**`--from-file PATH` starts from a file instead of a guess.** When you already
+have one file and need its neighbourhood — callers, collaborators, tests, what it
+co-changes with — seed from it and let the same fan-out do the work. It combines
+with a keyword (`retry --from-file src/ui/Avatar.tsx`) or stands alone.
+
 Flags worth knowing: `--depth 0` for direct hits only (5 hops by default),
 `--no-tests` to drop test sources (they are demoted and tagged `[test]`
 otherwise), `-n` to shorten the list, `--seeds` to widen the fan-out base,
-`--fuzzy` to move the similarity bar (0.8 default; `--fuzzy 0` for exact only).
+`--fuzzy` to move the similarity bar (0.8 default; `--fuzzy 0` for exact only),
+`--root` when a keyword could be read as a directory name. To cut passes:
+`--no-git` (skip co-change), `--no-evidence` (drop the source lines),
+`--no-cache` (ignore the cached declaration map — declarations are cached per
+source root against the tree's newest mtime, so repeated runs in one session
+re-use the `ast-grep` pass).
 
 **The TypeScript one follows the module graph.** A TS import names a file, not a
 type, so `search-ts-sources.py` resolves module specifiers to real paths and
