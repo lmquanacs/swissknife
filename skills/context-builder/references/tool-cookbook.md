@@ -1,216 +1,21 @@
+# Tool Cookbook
+
+Flags, recipes, and failure modes for the search tools Phase 2 runs on. Read the
+section you need, not the whole file.
+
+**Contents**
+- Saving reusable searches in `.scripts/`
+- `tree` — orientation
+- `rg` — text search
+- `fd` — file discovery
+- `ast-grep` — structural search (**start at "the four gotchas"** when a pattern
+  returns nothing)
+- `jq` — JSON
+- `yq` — YAML
+- Combinations that do real work
+- Availability and fallbacks
+
 ---
-name: code-researcher
-description: Investigate unfamiliar or large codebases fast using tree, ripgrep (rg), fd, ast-grep, jq, and yq, saving reusable searches as scripts in a local .scripts/ folder. Includes bundled scripts that turn a keyword into a ranked reading list for Java/Kotlin and TypeScript/JavaScript repos. Use when locating where a symbol is defined or used, tracing call sites and data flow, auditing a pattern across many files, finding recently-changed files, comparing how something is done in two places, deciding which files to read first in a Gradle/Maven or TypeScript project, or answering "where is X" / "how does Y work" in a repo too big to read.
----
-
-# Code Researcher
-
-A workflow for answering questions about a codebase with search tools instead of
-reading files at random. The goal is always to **narrow to a small set of files,
-then read those files properly.**
-
-## Pick the right tool
-
-| Question | Tool |
-|---|---|
-| What does this repo/directory look like at a glance? | `tree` |
-| Where does this *text* appear? | `rg` |
-| What files *exist* with this name/extension/age? | `fd` |
-| Where does this *code shape* appear (calls, defs, JSX, imports)? | `ast-grep` |
-| Something emitted JSON | `jq` |
-| Something is YAML (config, CI, compose) | `yq` |
-| I have <10 candidate files and need to understand them | the `Read` tool |
-
-Rule of thumb: **`rg` for text, `ast-grep` for structure.** Reach for `ast-grep`
-the moment a regex would need to care about whitespace, line breaks, nesting, or
-balanced parens — those are exactly the cases regex gets wrong.
-
-Never fall back to `find`, `grep`, recursive `ls`, or regex-based source rewrites
-when the purpose-built tool above applies — those produce noisier output and, for
-rewrites, are more likely to corrupt code. **If a preferred tool is missing, say so
-before falling back** (see Availability and fallbacks at the end).
-
-## Method
-
-0. **Get oriented** with `tree -L 2 -I '.git|node_modules|build|dist|target'` (or
-   `-L 3` for a smaller repo) the first time you touch an unfamiliar directory —
-   cheaper than a blind search and it tells you where the code even lives.
-1. **Cast wide, cheaply.** `rg -l` / `rg -c` to see *which* and *how many* files
-   are involved before printing any match bodies. A search that returns 400 hits
-   is a signal to narrow, not to read 400 hits.
-2. **Narrow** with type filters (`-t ts`), globs (`-g`), and word boundaries (`-w`).
-3. **Confirm structurally** with `ast-grep` if the pattern is code-shaped.
-4. **Read** the surviving handful of files with the `Read` tool.
-5. **Save anything you'll run again** into `.scripts/` (see below) instead of
-   retyping it on the next pass.
-
-Report findings as `path/to/file.ts:42` — those are clickable.
-
-## Java/Kotlin/TypeScript: run the bundled script instead of steps 1-4
-
-This skill ships with two scripts that do the whole narrowing pass in one
-command — `scripts/search-jvm-sources.py` for `.java`/`.kt`/`.kts`, and
-`scripts/search-ts-sources.py` for `.ts`/`.tsx`/`.js`/`.jsx`. Same CLI, same
-flags, same output. Invoke by absolute path from this skill's own directory (the
-one holding `SKILL.md`) — they are *not* on `PATH` and do not live in the repo
-being searched:
-
-```bash
-~/.claude/skills/code-researcher/scripts/search-jvm-sources.py <keyword>... [root]
-~/.claude/skills/code-researcher/scripts/search-ts-sources.py <keyword>... [root]
-```
-
-It prints a reading list of at most 200 files, grouped by why each one is on it:
-
-```
-Reading list for 'auth' — 24 files, ~3,447 lines to read
-
-READ FIRST (11 files, ~1,177 lines) — the keyword is named or declared here
-    1. src/store/auth.ts:6              file name is the keyword, declares a matching symbol [20×]
-       interface AuthStore {
-       tested by __tests__/auth.test.ts
-    2. src/lib/config.ts:15             declares a matching symbol, imported by screens/SignInScreen.tsx
-       export const OAUTH_REDIRECT_URI = 'coldstart://auth';
-THEN (13 files, ~2,270 lines) — imported by / imports the files above
-   12. src/lib/tokenStore.ts:6          imported by store/auth.ts, changed with auth.ts (3×)
-SKIM IF NEEDED (1 file, ~69 lines) — further out, reached through an on-topic module
-   24. src/components/ChatInput.tsx:52  renders MentionSuggestions
-
-ALSO MENTIONED (2 config/resource files, not sources)
-       app.config.ts:1
-```
-
-Read top-down and stop when the question is answered — the tiers exist so that
-stopping early is safe.
-
-Each row carries the evidence with it, so most files can be triaged without being
-opened: the **matched source line** under every READ FIRST entry, the **relation**
-that pulled a file in (`implements X`, `extends X`, `calls X`, `renders X`,
-`uses X` — subtyping and calls are ranked above a bare mention, so "who implements
-this interface" answers itself), a **mention count** (`[20×]`), the file's **test**
-attached to its subject rather than listed separately, and **`changed with`** when
-git history keeps moving two files in the same commit — which finds the migration
-or the config that no type reference points at. The trailer lists keyword hits in
-build files, manifests and resources: not code to read, but usually the fastest
-orientation there is. `--json` carries all of it per file (`tier`, `hops`, `score`,
-`lines_total`, `evidence`, `why`, `tests`, `cochange`) plus `config_mentions`.
-
-What it saves you from doing by hand: it searches only real source sets
-(`src/main/java`, `src/main/kotlin`, `test/…`, `commonMain/…`) so `build/`,
-`out/`, `target/` and `generated/` never pollute results; matches the keyword
-case-insensitively across `userProfile` / `user_profile` / `USER-PROFILE`; then
-fans out from the direct hits along type references and imports to pull in the
-call sites and collaborators — gated on the keyword past the first hop, so it
-stays a search instead of enumerating the dependency graph.
-
-**It is fuzzy, so a wrong guess still lands.** Matching runs against the repo's
-own vocabulary — file names and declared type names — so `srvconfig` finds
-`ServerConfig` (0.86), `McpServelt` finds `McpServlet` (0.93), and `workspace svc`
-finds `WorkspaceService`. Word order does not matter (`config server` works).
-Matches are shown as `≈ServerConfig (0.86)` and discounted by similarity, so they
-never outrank the real thing. This is what to use **instead of spending round 2
-of the search budget on synonyms** — one run tells you whether the name you are
-guessing at exists in some other spelling. When nothing clears the bar, the error
-names the closest identifiers in the repo, which answers the vocabulary-mismatch
-question directly.
-
-**Several keywords narrow better than one long one.** `search-ts-sources.py auth
-retry --all` keeps only files carrying *both* and ranks them by the weaker one —
-"where do X and Y meet" in a single run instead of two runs and a manual diff.
-Without `--all` the keywords are unioned. When an `--all` run comes back empty it
-reports the per-keyword counts (`'auth': 40 files, 'retry': 0`), which is the
-answer, not a failure.
-
-**`--from-file PATH` starts from a file instead of a guess.** When you already
-have one file and need its neighbourhood — callers, collaborators, tests, what it
-co-changes with — seed from it and let the same fan-out do the work. It combines
-with a keyword (`retry --from-file src/ui/Avatar.tsx`) or stands alone.
-
-Flags worth knowing: `--depth 0` for direct hits only (5 hops by default),
-`--no-tests` to drop test sources (they are demoted and tagged `[test]`
-otherwise), `-n` to shorten the list, `--seeds` to widen the fan-out base,
-`--fuzzy` to move the similarity bar (0.8 default; `--fuzzy 0` for exact only),
-`--root` when a keyword could be read as a directory name. To cut passes:
-`--no-git` (skip co-change), `--no-evidence` (drop the source lines),
-`--no-cache` (ignore the cached declaration map — declarations are cached per
-source root against the tree's newest mtime, so repeated runs in one session
-re-use the `ast-grep` pass).
-
-**The TypeScript one follows the module graph.** A TS import names a file, not a
-type, so `search-ts-sources.py` resolves module specifiers to real paths and
-follows them both ways — what a seed imports and who imports it. `@/lib/auth`,
-`~/lib/auth` and `src/lib/auth` all resolve without reading tsconfig. Source
-roots are `src`/`app`/`lib`/test dirs at any depth, so monorepos work as-is. Only
-*exported* declarations become graph symbols, symbols spread across more than 20%
-of the repo are ignored as edges, and re-export-only `index.ts` barrels are
-demoted.
-
-Both need `rg`; `fd` and `ast-grep` are used when present and each prints a notice
-before falling back. Declared names come from `ast-grep` by node kind rather than
-regex — a Java comment reading "the record that ..." otherwise registers a type
-called `that`, and in TS a regex cannot tell an exported symbol from a local
-`const res` inside an exported function.
-
-For anything that isn't Java, Kotlin, or TypeScript/JavaScript, use the method
-above.
-
-## Search budget: three rounds, then ask
-
-Each individual search is cheap, which is exactly the trap — a stalled
-investigation doesn't announce itself, it just keeps producing plausible next
-commands. Twenty of them cost more than the question you should have asked after
-the third. Searching is not free just because no single command is expensive.
-
-**Budget: three rounds per unknown.** A round is one hypothesis, however many
-commands it takes to test. Escalate deliberately rather than re-rolling the same
-idea:
-
-1. The user's exact vocabulary — `rg -lw 'theirTerm'`.
-2. Loosened — drop `-w`, add `-i`, add `-u` (the file may be `.gitignore`d),
-   widen the glob.
-3. Structural or synonymous — `ast-grep` for the code shape, or the two or three
-   names the codebase would plausibly use instead.
-
-If round 3 ends without a candidate file set, **stop and ask.** Do not start a
-fourth round with a fourth synonym.
-
-### Stop before spending the budget when
-
-- **The user's term returns zero hits anywhere**, including `-i -u`. Their word
-  doesn't exist in this repo — that's a vocabulary mismatch, and no amount of
-  additional searching invents the mapping. Ask what it's called here.
-- **Two readings both have real hits.** That's ambiguity, not a search problem;
-  more searching cannot resolve which one they meant.
-- **Narrowing twice still leaves 100+ hits.** The request is too broad to act on.
-  Ask which subsystem, not which regex.
-- **The answer depends on intent that isn't in the code** — which of two designs
-  they want, whether a behavior is a bug or deliberate. Unknowable by grep.
-
-### Ask a question that carries the search
-
-A bare "can you clarify?" throws away everything you learned and makes the user
-do the work twice. State what you looked for, what you found, and offer the
-specific choice:
-
-> `rg -lw 'sessionToken'` finds nothing. The closest things are `authToken` in
-> [auth/session.ts:18](auth/session.ts#L18) and `refreshToken` in
-> [auth/refresh.ts:40](auth/refresh.ts#L40). Which is the one that's expiring early?
-
-That's answerable in three words. "Where is the session code?" is not.
-
-### Don't ask when
-
-You haven't run a single search yet — spend at least round 1 first; most
-questions die there. The answer is derivable from what you've already read.
-Or it's a routine judgment call a colleague would just make and mention
-(naming, file placement, test location) — make it, say you made it, move on.
-
-### Stay inside the question
-
-Adjacent problems you notice mid-search — a nearby bug, a dubious pattern, a
-tempting refactor — get **mentioned in one line at the end**, not investigated.
-Each detour costs another handful of files in context and pushes the actual
-answer further away. Finish the asked question first.
 
 ## Work through `.scripts/`, don't re-type pipelines
 
@@ -223,10 +28,10 @@ and quietly introduces typos that silently change the result.
 - Every script goes in a `.scripts/` directory at the root of the current working
   directory. **Create it yourself when it doesn't exist** (`mkdir -p .scripts`) —
   don't ask, don't fall back to running inline.
-- **Don't re-create what ships with this skill.** `scripts/search-jvm-sources.py`
-  and `scripts/search-ts-sources.py` already cover "which files should I read for
-  X" in JVM and TS repos — call them, don't write a smaller version into
-  `.scripts/`.
+- **Don't re-create what ships with this skill.**
+  `${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py` and its TS twin already
+  cover "which files should I read for X" in JVM and TS repos — call them, don't
+  write a smaller version into `.scripts/`.
 - **Check `.scripts/` before writing a new one.** The script you need may already
   be there; extend it rather than adding a near-duplicate. `ls .scripts/` is the
   fastest check — and note that `rg --files` and `fd` do **not** list `.scripts/`
@@ -531,11 +336,6 @@ for l in ts tsx; do ast-grep run -p 'useEffect($$$)' -l $l --json=compact; done 
 ast-grep run -p '$X!!' -l kotlin --json | jq -r '.[].file' | sort | uniq -c | sort -rn
 ```
 
-## Don't hang the terminal
-
-Read files with the `Read` tool, not a pager-backed command. Anything that may
-page or wait for input needs that disabled explicitly — `git --no-pager diff`,
-`git log | cat` — or it blocks forever.
 
 ## Availability and fallbacks
 

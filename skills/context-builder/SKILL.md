@@ -1,6 +1,6 @@
 ---
 name: context-builder
-description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use this whenever a task requires understanding code, repos, docs, or file sets you haven't read yet — bug hunts, "how does X work", cross-file refactors, code review, writing a brief or handoff for another agent, or any request where you would otherwise start opening files at random. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time the task touches more than two files.
+description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, or cost per task, or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
 ---
 
 # Context Builder
@@ -27,10 +27,15 @@ Two costs, not one:
   attend to. A 50k-token context of mostly-noise performs *worse* than a
   3k-token context of signal, at 15× the price.
 
-Searching is cheap; reading is expensive. A `grep` over a repo costs a few
-hundred tokens and tells you which of 400 files matter. Reading four wrong
-files costs 20k and tells you nothing. **Always spend more on search than you
-think you need, so you can spend less on reads.**
+Searching is cheap; reading is expensive. A `rg` over a repo costs a few hundred
+tokens and tells you which of 400 files matter. Reading four wrong files costs
+20k and tells you nothing. **Always spend more on search than you think you
+need, so you can spend less on reads.**
+
+The trap is that no single search is expensive, so a stalled investigation
+doesn't announce itself — it just keeps producing plausible next commands.
+Twenty of them cost more than the question you should have asked after the
+third. That is what Phase 3 is for.
 
 ## Phase 1 — Frame
 
@@ -60,23 +65,55 @@ you don't yet know what you're looking for, and any file you open is a guess.
 
 ## Phase 2 — Discover
 
-Climb the ladder. Each rung is roughly 10× the cost of the one below it, so
-only go up when the rung below has been exhausted.
+### Pick the tool by what you're asking
 
-1. **Structure** — `git ls-files`, `tree -L 2`, directory listing. Gives you
-   the shape of the world for ~200 tokens.
-2. **Paths** — glob on names. `**/*repository*`, `**/*.config.*`. Names encode
+| Question | Tool |
+|---|---|
+| What does this repo/directory look like at a glance? | `tree` |
+| Where does this *text* appear? | `rg` |
+| What files *exist* with this name, extension, or age? | `fd` |
+| Where does this *code shape* appear (calls, defs, JSX, imports)? | `ast-grep` |
+| Something emitted JSON | `jq` |
+| Something is YAML (config, CI, compose) | `yq` |
+| I have <10 candidate files and need to understand them | the `Read` tool |
+
+Rule of thumb: **`rg` for text, `ast-grep` for structure.** Reach for `ast-grep`
+the moment a regex would need to care about whitespace, line breaks, nesting, or
+balanced parens — those are exactly the cases regex gets wrong. Never fall back
+to `find`, `grep`, recursive `ls`, or regex-based source rewrites when the
+purpose-built tool applies. Check availability once per session with
+`command -v tree fd rg ast-grep jq yq`, and **if a preferred tool is missing, say
+so before falling back** rather than silently degrading to a noisier command.
+
+`references/tool-cookbook.md` has the flags, the per-language `ast-grep` gotchas,
+the fallback table, and the `.scripts/` convention for searches you'll re-run.
+Open it when a search comes back empty or you're about to retype a long pipeline.
+
+### Climb the ladder
+
+Each rung is roughly 10× the cost of the one below it, so only go up when the
+rung below has been exhausted.
+
+1. **Structure** — `tree -L 2 -I '.git|node_modules|build|dist|target'` the first
+   time you touch an unfamiliar directory. The shape of the world for ~200 tokens,
+   and it tells you where the code even lives.
+2. **Paths** — `fd` on names. `**/*repository*`, `**/*.config.*`. Names encode
    intent; use them before content.
-3. **Content search** — `rg -l <symbol>` to find *which* files, then `rg -n -C3`
-   to see *where* and roughly what. Often this alone answers a question with no
-   file read at all.
-4. **Ranged reads** — read the 40 lines around the hit, not the 900-line file.
-5. **Full reads** — reserved for files that are both small and central
+3. **Content search** — `rg -l` / `rg -c` to see *which* and *how many* files are
+   involved before printing any match bodies, then `rg -n -C3` to see where and
+   roughly what. A search returning 400 hits is a signal to narrow (type filters
+   `-t ts`, globs `-g`, word boundaries `-w`), not to read 400 hits. Often this
+   alone answers a question with no file read at all.
+4. **Structural confirmation** — `ast-grep` when the pattern is code-shaped.
+5. **Ranged reads** — read the 40 lines around the hit, not the 900-line file.
+6. **Full reads** — reserved for files that are both small and central
    (interfaces, configs, schemas, the one class the task is about).
 
-**Seed strategy.** Pick based on what the task gives you:
+### Seed strategy
 
-- Task names a symbol, error string, endpoint, or file → **anchor-out**. Grep
+Pick based on what the task gives you:
+
+- Task names a symbol, error string, endpoint, or file → **anchor-out**. Search
   the exact string, land on it, expand outward through callers and callees.
   This is the default and it is much cheaper than browsing.
 - Task is vague or the domain is unfamiliar → **top-down**. README, entry
@@ -86,9 +123,51 @@ only go up when the rung below has been exhausted.
 neighbours are: the interface/type it implements, its direct caller, and its
 configuration. Not its tests, not its siblings, not the whole package.
 
-See `references/discovery-recipes.md` for concrete search patterns by question
-type (data flow, config resolution, error origin, convention discovery) and for
-the list of files that are almost never worth reading.
+### JVM and TypeScript: run the bundled script instead of rungs 2–4
+
+Two bundled scripts do the whole narrowing pass in one command —
+`search-jvm-sources.py` for `.java`/`.kt`/`.kts`, `search-ts-sources.py` for
+`.ts`/`.tsx`/`.js`/`.jsx`. Same CLI, same flags, same output. They are not on
+`PATH`; invoke them from this skill's own directory:
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py <keyword>... [root]
+${CLAUDE_SKILL_DIR}/scripts/search-ts-sources.py <keyword>... [root]
+```
+
+The output is a reading list of at most 200 files, tiered **READ FIRST / THEN /
+SKIM IF NEEDED** by how each file was found, numbered in reading order, with a
+line count per tier so you know what you're signing up for. Read top-down and
+stop when the question is answered — the tiers exist so that stopping early is
+safe.
+
+Each row carries its own evidence, so most files can be triaged without being
+opened: the matched source line, the relation that pulled the file in
+(`implements X`, `calls X`, `renders X` — subtyping and calls rank above a bare
+mention, so "who implements this interface" answers itself), a mention count,
+the file's test attached to its subject, and `changed with` when git history
+keeps moving two files together — which finds the migration or config that no
+type reference points at. `--json` carries all of it per file.
+
+Three properties make this the right first move rather than a fallback:
+
+- **It is fuzzy, so a wrong guess still lands.** Matching runs against the repo's
+  own vocabulary, so `srvconfig` finds `ServerConfig` (0.86) and `McpServelt`
+  finds `McpServlet` (0.93). Use this **instead of spending a round on
+  synonyms** — one run tells you whether the name you're guessing at exists in
+  another spelling. When nothing clears the bar, the error names the closest
+  identifiers in the repo, which answers the vocabulary question directly.
+- **Several keywords narrow better than one.** `auth retry --all` keeps only
+  files carrying both and ranks by the weaker one — "where do X and Y meet" in
+  one run. An empty `--all` run reports per-keyword counts, which is the answer,
+  not a failure.
+- **`--from-file PATH` starts from a file instead of a guess** — callers,
+  collaborators, tests, co-changes. Combines with a keyword or stands alone.
+
+Flags worth knowing: `--depth 0` for direct hits only, `--no-tests`, `-n` to
+shorten, `--fuzzy` to move the similarity bar (0.8 default), `--no-git` /
+`--no-evidence` / `--no-cache` to cut passes. For anything that isn't JVM or
+TS/JS, use the ladder above.
 
 ## Phase 3 — Reflect
 
@@ -105,25 +184,76 @@ Then ask three things:
 
 1. **Which questions are still open, and is there a specific search that would
    close them?** If yes, run it. If you can't name the search, more reading
-   won't help — mark it as an open question in the pack instead.
+   won't help.
 2. **What did this round newly expose?** New identifiers, a config key, an
    interface you didn't know existed. Chase one *only if a live question
    depends on it.* Curiosity is how packs get to 40k tokens.
 3. **Am I saturating?** If a round changed no statuses, further reads in that
    direction are dead weight. Change direction or stop.
 
-**Stop conditions** — stop at whichever comes first:
+### Three rounds per open question
 
-- All questions answered.
-- A round produced no status change (saturation).
-- The budget tier is spent.
+A round is one hypothesis, however many commands it takes to test. Escalate
+deliberately rather than re-rolling the same idea:
 
-Two to three rounds is normal. Beyond three, you are usually re-reading things
-you already understand.
+1. The user's exact vocabulary — `rg -lw 'theirTerm'`.
+2. Loosened — drop `-w`, add `-i`, add `-u` (the file may be `.gitignore`d),
+   widen the glob.
+3. Structural or synonymous — `ast-grep` for the code shape, or the two or three
+   names the codebase would plausibly use instead.
 
-**An open question is a legitimate output.** "I could not determine X; the
-likely place is Y" is far more useful than a confident guess, and it costs
-almost nothing. Never fill a gap with plausible invention.
+If round 3 ends without a candidate file set, **stop.** Do not start a fourth
+round with a fourth synonym. You have two legitimate exits, and which one you
+take depends on whether a human can resolve it:
+
+- **The user can resolve it** → ask, carrying the search (below).
+- **They can't, or it isn't blocking** → log it under Open questions in the pack.
+
+**An open question is a legitimate output.** "I could not determine X; the likely
+place is Y" is far more useful than a confident guess, and it costs almost
+nothing. Never fill a gap with plausible invention.
+
+**Stop conditions for the whole phase** — whichever comes first: all questions
+answered, a round produced no status change, or the budget tier is spent. Two to
+three rounds is normal. Beyond three, you are usually re-reading things you
+already understand.
+
+### Stop before spending the budget when
+
+- **The user's term returns zero hits anywhere**, including `-i -u`. Their word
+  doesn't exist in this repo — that's a vocabulary mismatch, and no amount of
+  additional searching invents the mapping.
+- **Two readings both have real hits.** That's ambiguity, not a search problem;
+  more searching cannot resolve which one they meant.
+- **Narrowing twice still leaves 100+ hits.** The request is too broad to act on.
+  Ask which subsystem, not which regex.
+- **The answer depends on intent that isn't in the code** — which of two designs
+  they want, whether a behavior is a bug or deliberate. Unknowable by search.
+
+### Ask a question that carries the search
+
+A bare "can you clarify?" throws away everything you learned and makes the user
+do the work twice. State what you looked for, what you found, and offer the
+specific choice:
+
+> `rg -lw 'sessionToken'` finds nothing. The closest things are `authToken` in
+> [auth/session.ts:18](auth/session.ts#L18) and `refreshToken` in
+> [auth/refresh.ts:40](auth/refresh.ts#L40). Which is the one that's expiring early?
+
+That's answerable in three words. "Where is the session code?" is not.
+
+**Don't ask when** you haven't run a single search yet — spend at least round 1
+first; most questions die there. Or when the answer is derivable from what
+you've already read. Or when it's a routine judgment call a colleague would just
+make and mention (naming, file placement, test location) — make it, say you made
+it, move on.
+
+### Stay inside the question
+
+Adjacent problems you notice mid-search — a nearby bug, a dubious pattern, a
+tempting refactor — get **mentioned in one line at the end**, not investigated.
+Each detour costs another handful of files in context and pushes the actual
+answer further away. Finish the asked question first.
 
 ## Phase 4 — Shape
 
@@ -132,6 +262,7 @@ A context pack is a **briefing, not an archive**. Four principles:
 - **Anchors over excerpts.** `auth/Filter.kt:88 — validates JWT, throws on
   expiry` beats pasting the method. Paste code only when the agent must
   reproduce exact syntax: signatures, schemas, config keys, error strings.
+  Report findings as `path/to/file.ts:42` — those are clickable.
 - **Label confidence.** Mark each claim `verified` (you read it), `inferred`
   (deduced from naming/structure), or `assumed`. Unlabelled inference is how
   hallucination enters downstream.
@@ -177,10 +308,6 @@ A context pack is a **briefing, not an archive**. Four principles:
 Drop empty sections rather than writing "N/A". For Micro-tier tasks, Objective
 + Findings + Next action is the whole pack.
 
-`references/pack-templates.md` has the variants: **delta packs** (for a task
-already in progress), **handoff packs** (for another agent or a fresh session),
-and **review packs** (evidence-first, for critique tasks).
-
 ## Self-check before handing off
 
 - Could someone act correctly on this pack without opening any other file?
@@ -193,11 +320,29 @@ and **review packs** (evidence-first, for critique tasks).
 
 | Instead of | Do this |
 |---|---|
-| Reading files to "get oriented" | Grep for the task's own words first |
+| Reading files to "get oriented" | Search for the task's own words first |
 | Reading the whole file | Read the range the hit is in |
 | Reading tests to learn the API | Read the interface; tests are 5× the tokens |
+| Printing match bodies on the first pass | `rg -l` / `rg -c` to size the blast radius |
+| A fourth synonym after three rounds | Stop: ask, or log it as an open question |
 | Pasting large excerpts | Anchor + one-line claim |
 | Chasing every new identifier | Chase only what an open question depends on |
+| Investigating an adjacent problem you spotted | One line at the end, after the answer |
 | Silently guessing a gap | Log it under Open questions |
 | One pack for a sprawling task | Split the task, one pack each |
 | Re-reading a file already in context | Cite what you already have |
+
+## Reference files
+
+- `references/tool-cookbook.md` — flags and recipes for `rg`, `fd`, `ast-grep`,
+  `jq`, `yq`, `tree`; the four `ast-grep` gotchas and per-language patterns; the
+  fallback table; and the `.scripts/` convention for reusable searches.
+- `references/discovery-recipes.md` — Phase 2 search patterns by question type
+  (data flow, config resolution, error origin, convention discovery), plus the
+  files that are almost never worth reading and a cost reference.
+- `references/pack-templates.md` — Phase 4 variants: delta packs (task already in
+  progress), handoff packs (another agent or a fresh session), review packs
+  (evidence-first, for critique), and working sets for long-running loops.
+
+Don't read a pager-backed command's output into context — use the `Read` tool for
+files, and disable paging explicitly (`git --no-pager diff`) or it blocks forever.

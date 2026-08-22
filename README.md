@@ -4,28 +4,41 @@ Personal Claude Code tooling.
 
 ## Skills
 
-### `code-researcher`
+### `context-builder`
 
-A workflow for investigating unfamiliar or large codebases with search tools
-instead of reading files at random: narrow to a small set of files, then read
-those properly.
+One skill covering the whole arc from "I don't know this codebase" to "here is
+exactly what the next agent needs to know." A four-phase loop — **Frame →
+Discover → Reflect → Shape** — built on the premise that most bad agent output
+is a context failure, not a reasoning failure: the model was missing the one
+file that mattered, or it was buried under forty that didn't.
 
-- **`rg` for text, `ast-grep` for structure** — reach for ast-grep the moment a
-  regex would have to care about whitespace, line breaks, or balanced parens.
-- **`fd`** for finding files by name, extension, or age (`--changed-within 1d` to
-  see what someone was just working on).
-- **`jq`** for anything that emits JSON.
-- **`.scripts/`** — any command worth running twice gets saved as a parameterized
-  shell or Python script in a local `.scripts/` folder, instead of being retyped
-  with slight variations on every pass.
-- **A three-round search budget** — when a search stalls, stop and ask one
-  specific question carrying what you already found, rather than grinding through
-  a fourth synonym.
-- **Two bundled reading-list scripts** — [`search-jvm-sources.py` and
-  `search-ts-sources.py`](#the-reading-list-scripts) below, which do the whole
-  narrowing pass in one command for JVM and TypeScript repos.
+- **Frame** — turn the task into three to seven checkable questions and pick a
+  budget tier before opening anything.
+- **Discover** — climb the cost ladder (structure → paths → text search →
+  structural search → ranged reads → full reads), where each rung costs ~10× the
+  one below. **`rg` for text, `ast-grep` for structure**; `fd` for files by name,
+  extension or age; `jq`/`yq` for anything structured.
+- **Reflect** — the phase that gets skipped. Write a ledger of question →
+  status → evidence after each round. **Three rounds per open question**, then
+  either ask a question that carries the search, or log it as an open question.
+  An open question is a legitimate output; a confident guess is not.
+- **Shape** — pack findings as anchors (`path:line`) rather than excerpts, label
+  every claim `verified` / `inferred` / `assumed`, and order stable material
+  first so the prefix stays cacheable.
 
-Source: [`skills/code-researcher/SKILL.md`](skills/code-researcher/SKILL.md)
+Bundled: **two reading-list scripts** ([below](#the-reading-list-scripts)) that
+collapse the whole narrowing pass into one command for JVM and TypeScript repos,
+and a **`.scripts/` convention** — any command worth running twice gets saved as
+a parameterized script instead of retyped with slight variations every pass.
+
+Source: [`skills/context-builder/SKILL.md`](skills/context-builder/SKILL.md).
+The body stays under 500 lines; the detail lives in `references/` and loads only
+when needed — [`tool-cookbook.md`](skills/context-builder/references/tool-cookbook.md)
+(tool flags, `ast-grep` gotchas, fallbacks, `.scripts/`),
+[`discovery-recipes.md`](skills/context-builder/references/discovery-recipes.md)
+(search patterns by question type), and
+[`pack-templates.md`](skills/context-builder/references/pack-templates.md)
+(delta, handoff, review, and working-set pack variants).
 
 #### The reading-list scripts
 
@@ -46,16 +59,21 @@ ship inside the skill, so installing the skill installs them — and they run
 standalone just as well.
 
 ```bash
-skills/code-researcher/scripts/search-jvm-sources.py <keyword> [root] \
-  [-n 200] [--depth 5] [--fuzzy 0.8] [--no-tests] [--json]
+skills/context-builder/scripts/search-jvm-sources.py <keyword>... [root] \
+  [-n 200] [--depth 5] [--fuzzy 0.8] [--no-tests] [--from-file PATH] [--json]
 
 # once the skill is installed, the copies on hand are:
-~/.claude/skills/code-researcher/scripts/search-jvm-sources.py AuthToken ~/work/api
-~/.claude/skills/code-researcher/scripts/search-ts-sources.py useAuth ~/work/app
-~/.claude/skills/code-researcher/scripts/search-ts-sources.py billing . --no-tests
-~/.claude/skills/code-researcher/scripts/search-ts-sources.py 'vector store' . --json \
+~/.claude/skills/context-builder/scripts/search-jvm-sources.py AuthToken ~/work/api
+~/.claude/skills/context-builder/scripts/search-ts-sources.py useAuth ~/work/app
+~/.claude/skills/context-builder/scripts/search-ts-sources.py billing . --no-tests
+~/.claude/skills/context-builder/scripts/search-ts-sources.py 'vector store' . --json \
   | jq -r '.results[] | select(.tier=="READ FIRST") | .file'
 ```
+
+From inside the skill body, they are invoked as
+`${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py` — Claude Code substitutes
+that variable with the skill's own directory, so the path works whether the skill
+is installed personally, per-project, or symlinked.
 
 ```
 Reading list for 'mcp server' — 7 files, ~1,159 lines to read
@@ -165,19 +183,21 @@ one is deprecated and prints a warning on every invocation.
 ## Installing the skill
 
 Claude Code discovers skills in two places: `~/.claude/skills/` (available in
-every project) and `<project>/.claude/skills/` (that project only). This repo
-keeps skills in a plain top-level `skills/` directory, so pick one of the
-following to make it visible to Claude.
+every project) and `<project>/.claude/skills/` (that project only). The command
+you type comes from the **directory name**, so the installed directory must be
+called `context-builder` for `/context-builder` to work. This repo keeps skills
+in a plain top-level `skills/` directory, so pick one of the following to make it
+visible to Claude.
 
 ### Symlink for personal use — recommended
 
-Keeps this repo as the single source of truth. Edits to `SKILL.md` and to
-`scripts/search-jvm-sources.py` take effect immediately, and `git pull` updates
+Keeps this repo as the single source of truth. Edits to `SKILL.md`, the
+`references/`, and the scripts take effect immediately, and `git pull` updates
 the installed skill.
 
 ```bash
 mkdir -p ~/.claude/skills
-ln -s "$(pwd)/skills/code-researcher" ~/.claude/skills/code-researcher
+ln -s "$(pwd)/skills/context-builder" ~/.claude/skills/context-builder
 ```
 
 ### Symlink into a single project
@@ -186,14 +206,14 @@ When you only want it in one repo, and/or want to commit it for teammates:
 
 ```bash
 mkdir -p /path/to/project/.claude/skills
-ln -s "$(pwd)/skills/code-researcher" /path/to/project/.claude/skills/code-researcher
+ln -s "$(pwd)/skills/context-builder" /path/to/project/.claude/skills/context-builder
 ```
 
 Symlinks don't survive a `git clone`, so to share it with a team, copy the
 directory in and commit it instead:
 
 ```bash
-cp -R skills/code-researcher /path/to/project/.claude/skills/
+cp -R skills/context-builder /path/to/project/.claude/skills/
 ```
 
 ### Copy instead of symlink
@@ -202,18 +222,18 @@ If you'd rather pin a version and not have it move under you:
 
 ```bash
 mkdir -p ~/.claude/skills
-cp -R skills/code-researcher ~/.claude/skills/
+cp -R skills/context-builder ~/.claude/skills/
 ```
 
 ### Verify
 
 Start a new Claude Code session — skills are picked up at session start, so an
 already-running session won't see it. Then either invoke it by name with
-`/code-researcher`, or just ask a question it should trigger on, like
+`/context-builder`, or just ask a question it should trigger on, like
 "where is X defined in this repo?"
 
 If it doesn't show up, check that the file is at
-`~/.claude/skills/code-researcher/SKILL.md` (the directory name and the `name:`
+`~/.claude/skills/context-builder/SKILL.md` (the directory name and the `name:`
 field in the frontmatter should match) and that the YAML frontmatter is intact.
 
 ## Should this be a plugin?

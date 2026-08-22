@@ -4,7 +4,7 @@ Concrete search patterns for Phase 2. Read the section matching the question
 you're trying to close, not the whole file.
 
 **Contents**
-- Tooling (read once, then skip)
+- Tooling (habits; the tables live in `tool-cookbook.md`)
 - Recipe 1: Where does this value come from? (data flow, backward)
 - Recipe 2: Where does this go? (data flow, forward)
 - Recipe 3: Where is this configured?
@@ -20,23 +20,12 @@ you're trying to close, not the whole file.
 
 ## Tooling
 
-Check once per session, before the first search:
+The tool-selection table, the per-tool flags, and the fallback table live in
+`tool-cookbook.md`. Every recipe below assumes `rg` for text and `ast-grep` for
+structure, and that you ran `command -v tree fd rg ast-grep jq yq` once before
+the first search.
 
-```bash
-command -v tree fd rg ast-grep jq yq
-```
-
-Every recipe below assumes this split:
-
-| Looking for | Tool |
-|---|---|
-| Text — a name, a message, a key | `rg` |
-| A code *shape* — call, assignment, declaration, import | `ast-grep` |
-| Files by name, extension, or age | `fd` |
-| The shape of a directory | `tree` |
-| A value inside JSON / YAML / XML | `jq` / `yq` |
-
-Three habits that do most of the saving:
+Three habits do most of the saving, and they are what the recipes are built on:
 
 - **`rg -l` before `rg -n` before any read.** A filename list costs ~50 tokens
   and usually changes what you read next.
@@ -48,9 +37,6 @@ Three habits that do most of the saving:
   `.gitignore`, so `node_modules`, `dist`, `build`, and `target` are out by
   default. Adding `-g '!**/node_modules/**'` is noise; reach for `-uu` (rg) or
   `-I` (fd) on the rare occasion you need those trees.
-
-If one of these tools is missing, say so before falling back — see the last
-section.
 
 ---
 
@@ -211,13 +197,5 @@ by comparison, and any one of them can remove a read from the plan.
 ## If a tool is missing
 
 Name the missing tool before you fall back — a silent downgrade to a noisier
-command is how a pack ends up with bad evidence in it.
-
-| Preferred | If missing, state that, then |
-|---|---|
-| `tree` | `fd -t d -d 2 . \| head -50`, or `ls` one level at a time |
-| `fd` | `find . -path './node_modules' -prune -o -path './.git' -prune -o -type f -print` |
-| `rg` | `grep -rn --exclude-dir={.git,node_modules,dist,build}` |
-| `ast-grep` | `rg` to locate candidates, then inspect each in context — never a blind `sed -i` |
-| `jq` | `python3 -c 'import json,sys; ...'` or `node -e` |
-| `yq` | `python3 -c 'import yaml,sys; ...'`; `rg -n -A3` only for a non-structural peek |
+command is how a pack ends up with bad evidence in it. The fallback table is in
+`tool-cookbook.md`.
