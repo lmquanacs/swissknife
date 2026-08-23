@@ -211,7 +211,7 @@ jq -s \
 	[.[] | normalize]
 	| map(select(.author != null))
 	| map(select(.type != "review" or (.body | length) > 0))
-	| map(select(($excluded | index(.author | ascii_downcase)) | not))
+	| map(select((.author | ascii_downcase) as $a | ($excluded | index($a)) | not))
 	| (if $nobots == 1 then map(select(is_bot | not)) else . end)
 	| sort_by(.created_at // "")
 	| {
