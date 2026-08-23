@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""search-jvm-sources.py — rank Java/Kotlin source files to read for a keyword.
+"""search-java-sources.py — rank Java source files to read for a keyword.
 
-Usage: <skill-dir>/scripts/search-jvm-sources.py <keyword>... [root] [-n 200] [--json]
+Usage: <skill-dir>/scripts/search-java-sources.py <keyword>... [root] [-n 200] [--json]
 
-Searches only real source roots (src/main/java, src/main/kotlin, src/...), never
-build/, out/, target/ or generated output. Files that mention the keyword become
-seeds — including fuzzily, so a misspelled or abbreviated name still lands — and
-the ranking then fans out along type references and imports, so the list also
+Requires tree-sitter:  pip install tree-sitter tree-sitter-java
+
+Searches only real source roots (src/main/java, src/test/java, ...), never
+build/, out/ or target/. Files that mention the keyword become seeds —
+including fuzzily, so a misspelled or abbreviated name still lands — and the
+ranking then fans out along type references and imports, so the list also
 contains the callers and collaborators you need to make sense of the seeds.
 Past the first hop the fan-out is gated on the keyword, so it stays a search
 instead of drifting into the dependency closure. Prints at most 200 files.
+
+Every structural fact — what a file declares, what it imports, and whether it
+extends, implements, constructs or merely mentions a type — comes from a
+tree-sitter parse, so comments and string literals can never contribute an edge
+and a declaration split across lines is still seen. Raw mention *frequency*
+stays on ripgrep, because how often a word occurs in a file is a text question
+and rg answers it an order of magnitude faster than a parse would.
 
 Several keywords are allowed: by default they are unioned, with --all only files
 carrying every one of them seed the search. --from-file seeds from a path instead
@@ -28,6 +37,22 @@ import sys
 from collections import defaultdict
 from difflib import SequenceMatcher
 from functools import lru_cache
+
+try:
+    from tree_sitter import Language, Parser, Query
+    import tree_sitter_java
+except ImportError as exc:  # a hard dependency: there is no regex path any more
+    sys.exit(
+        f"error: {exc.name} is required by this script.\n"
+        "  pip install tree-sitter tree-sitter-java\n"
+        "Structural facts (declarations, imports, extends/implements edges) are\n"
+        "read from a real parse; there is no regex fallback."
+    )
+
+try:  # tree-sitter >= 0.25 moved captures onto a cursor
+    from tree_sitter import QueryCursor
+except ImportError:  # 0.23/0.24 keep Query.captures, same dict-of-lists result
+    QueryCursor = None
 
 if hasattr(signal, "SIGPIPE"):  # so `| head` exits quietly instead of trapping
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -57,7 +82,7 @@ EXCLUDE_DIRS = {
     "node_modules",
     ".git",
 }
-SOURCE_EXTS = (".java", ".kt", ".kts")
+SOURCE_EXTS = (".java",)
 
 # Wiring lives outside the source sets: Gradle files, Spring/Dagger XML, string
 # resources, the manifest. They are not ranked or read, but a keyword landing in
@@ -81,6 +106,9 @@ CONFIG_LIMIT = 6
 
 # Source sets to keep when a src/ dir uses the Gradle/Maven layout, in the order
 # they are checked. Anything else under src/ (res, resources, proto) is skipped.
+# The kotlin/ dirs are kept too: a mixed module occasionally puts .java files
+# under src/main/kotlin, and the extension filter in list_sources() is what
+# actually decides which files survive.
 SOURCE_SET_DIRS = [
     f"{sourceset}/{lang}"
     for sourceset in (
@@ -98,37 +126,33 @@ SOURCE_SET_DIRS = [
     for lang in ("java", "kotlin")
 ]
 
-# Fallback declaration regex, used only when ast-grep is missing. The uppercase
-# first letter is what keeps prose out ("the record that ..." in a comment).
-TYPE_DECL = r"\b(?:class|interface|object|enum|record|@interface)\s+([A-Z]\w*)"
-IMPORT_DECL = r"^\s*import\s+(?:static\s+)?[\w.]*?(\w+)\s*(?:;|$)"
+# One query per file, capture names doubling as the edge kind. The grammar keeps
+# `extends` and `implements` in separate nodes, so a declaration wrapped across
+# lines — `class Foo\n    extends Base\n    implements Iface` — is classified
+# exactly like a one-line one, and `extends_interfaces` catches the
+# interface-extends-interface case a superclass rule would miss.
+JAVA_QUERY = """
+(class_declaration name: (identifier) @decl)
+(interface_declaration name: (identifier) @decl)
+(record_declaration name: (identifier) @decl)
+(enum_declaration name: (identifier) @decl)
+(annotation_type_declaration name: (identifier) @decl)
 
-# Type declarations by node kind, so comments and strings can't contribute names.
-AST_RULES = [
-    """
-id: jvm-type-names
-language: java
-rule:
-  kind: identifier
-  inside:
-    any:
-      - {kind: class_declaration}
-      - {kind: interface_declaration}
-      - {kind: enum_declaration}
-      - {kind: record_declaration}
-      - {kind: annotation_type_declaration}
-""",
-    """
-id: jvm-type-names
-language: kotlin
-rule:
-  kind: type_identifier
-  inside: {kind: class_declaration}
-""",
-]
-# Kotlin `object` singletons parse differently from classes and the kind rule
-# above misses them; this pattern picks them up, name in metaVariables.
-AST_OBJECT_PATTERN = "object $N { $$$ }"
+(method_declaration name: (identifier) @member)
+(field_declaration (variable_declarator name: (identifier) @member))
+(record_declaration (formal_parameters (formal_parameter name: (identifier) @member)))
+
+(import_declaration (scoped_identifier) @import)
+
+(superclass (type_identifier) @extends)
+(super_interfaces (type_list (type_identifier) @implements))
+(extends_interfaces (type_list (type_identifier) @implements))
+(object_creation_expression type: (type_identifier) @call)
+(method_invocation object: (identifier) @call)
+(type_identifier) @mention
+"""
+
+MAX_PARSE_BYTES = 2_000_000  # a generated 5MB file is not what anyone is looking for
 
 # Score weights. Direct evidence is worth far more than fan-out, so a file the
 # keyword actually names always outranks something merely adjacent to it.
@@ -136,7 +160,7 @@ W_STEM_EXACT = 60.0  # file is named exactly after the keyword
 W_STEM_PART = 30.0  # keyword appears inside the file name
 W_PATH = 12.0  # keyword appears in a package/directory segment
 W_TYPE_DECL = 25.0  # declares a type whose name contains the keyword
-W_MEMBER_DECL = 8.0  # declares a fun/val/method whose name contains the keyword
+W_MEMBER_DECL = 8.0  # declares a fun/val whose name contains the keyword
 W_WORD_HIT = 3.0  # standalone-word mention
 W_SUB_HIT = 1.0  # mention inside a longer identifier
 W_FUZZY_MENTION = 6.0  # mention of a fuzzily-matched name, before the discount
@@ -147,24 +171,25 @@ HITS_CAP = 8  # ignore mention counts past this, one busy file isn't the answer
 COCHANGE_CAP = 3.0  # and the same for co-change: three tight commits make the point
 COCHANGE_TIGHTNESS = 6.0  # a commit of this many files counts once; wider counts less
 MIN_COCHANGE = 1.0  # one tight commit, or several loose ones — below that it is noise
+MAX_SYMBOL_SPREAD = 0.2  # a type referenced across more of the repo than this is noise
+MAX_SYMBOL_FILES = 50  # ...and never more than this many, however large the repo is
+AMBIGUOUS_DECL_FILES = 4  # a name this many files declare is a common noun, not an identity
 FANOUT = [0.35, 0.12, 0.05, 0.02, 0.01]  # share of a file's score passed on per hop
 TEST_PENALTY = 0.3
 
-# Not every mention of a type is the same kind of evidence. Subclassing it is a
-# structural commitment, constructing or calling it is real use, and everything
-# else may be a log string or a javadoc link — so the fan-out share is scaled by
-# which one it is. "Who implements this interface" is the question this answers.
+# Not every reference to a type is the same kind of evidence. Subclassing it is a
+# structural commitment, constructing or calling it is real use, and a bare type
+# mention may be a parameter type — so the fan-out share is scaled by which one
+# it is. "Who implements this interface" is the question this answers.
 EDGE_WEIGHT = {
     "extends": 1.6,
     "implements": 1.6,
-    "subtypes": 1.6,
     "call": 1.15,
     "mention": 1.0,
 }
 EDGE_VERB = {
     "extends": "extends",
     "implements": "implements",
-    "subtypes": "subtypes",
     "call": "calls",
     "mention": "uses",
 }
@@ -179,14 +204,14 @@ TIERS = [
 
 TEST_PATH = re.compile(r"(^|/)(test|tests|androidTest|integrationTest|testFixtures)(/|$)")
 # `Spec` is deliberately missing here: it only counts under a test path, because
-# OpenApiSpec.kt is production code and demoting it (or dropping it entirely
+# OpenApiSpec.java is production code and demoting it (or dropping it entirely
 # under --no-tests) loses a file that matters.
 TEST_STEM = re.compile(r"(Test|Tests|IT)$")
 TEST_SUFFIXES = ("Test", "Tests", "Spec", "IT")
 
 EVIDENCE_WIDTH = 96  # a source line is evidence, not a paragraph
 BORING_LINE = re.compile(r"^\s*(?:import|package)\b")  # true, and tells you nothing
-CACHE_VERSION = 2
+CACHE_VERSION = 3  # bumped: the cache now holds a full structural index
 
 
 def die(msg):
@@ -196,12 +221,13 @@ def die(msg):
 
 def rg(args, roots):
     """Run ripgrep over roots, returning stdout ('' when nothing matched)."""
-    # rg's built-in `java` type also covers .properties/.jsp, so define our own.
+    # rg's built-in `java` type also covers .properties/.jsp, and --type-add adds
+    # to an existing type rather than replacing it, so this defines a fresh name.
     # One --type-add per glob: the comma form is accepted but matches nothing.
     cmd = ["rg", "--no-messages"]
     for ext in SOURCE_EXTS:
-        cmd += ["--type-add", f"jvm:*{ext}"]
-    cmd += ["-t", "jvm"]
+        cmd += ["--type-add", f"javasrc:*{ext}"]
+    cmd += ["-t", "javasrc"]
     for glob in EXCLUDE_GLOBS:
         cmd += ["-g", glob]
     cmd += args + [str(r) for r in roots]
@@ -295,7 +321,7 @@ def find_source_roots(root):
 def list_sources(roots):
     if shutil.which("fd"):
         proc = subprocess.run(
-            ["fd", ".", "-t", "f", "-e", "java", "-e", "kt", "-e", "kts"]
+            ["fd", ".", "-t", "f", "-e", "java"]
             + [x for g in EXCLUDE_GLOBS for x in ("-E", g.lstrip("!"))]
             + roots,
             capture_output=True,
@@ -306,14 +332,17 @@ def list_sources(roots):
     for root in roots:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS and not d.startswith(".")]
-            files += [
-                os.path.join(dirpath, f) for f in filenames if f.endswith(SOURCE_EXTS)
-            ]
+            files += [os.path.join(dirpath, f) for f in filenames if f.endswith(SOURCE_EXTS)]
     return files
 
 
 def counts(pattern, roots, word=False):
-    """Per-file match counts for a pattern."""
+    """Per-file match counts for a pattern.
+
+    Text frequency, deliberately including comments and string literals: a
+    keyword in a log message or a KDoc block is still a sign the file is about
+    the thing. Structure comes from the parse; this is the other half.
+    """
     args = ["-i", "-c", "-e", pattern]
     if word:
         args.insert(0, "-w")
@@ -332,38 +361,44 @@ def trim(text):
 
 
 def first_hit(pattern, roots, limit=4):
-    """Each file's best early match as (line number, line text).
+    """Each file's first keyword mention as (line number, line text).
 
-    The text is what turns a reading list into something you can triage without
-    opening anything: "declares a matching type" tells you a file qualified,
-    `public final class ServerConfig implements Config` tells you whether to read
-    it. The first match is usually the import that pulled the name in, which
-    shows nothing, so a few lines are read and the first line that is not import
-    or package boilerplate wins.
+    Only used for files the keyword touches textually; a file's declarations
+    already carry their own exact positions from the parse, so the import-line
+    filtering the regex era needed here is gone.
     """
     hits = {}
-    for line in rg(["-i", "-n", "-m", str(limit), "--no-heading", "-e", pattern], roots).splitlines():
+    for line in rg(
+        ["-i", "-n", "-m", str(limit), "--no-heading", "-e", pattern], roots
+    ).splitlines():
         parts = line.split(":", 2)
         if len(parts) != 3 or not parts[1].isdigit():
             continue
         path, number, text = parts[0], int(parts[1]), parts[2]
         previous = hits.get(path)
-        if previous is None or (BORING_LINE.match(previous[1]) and not BORING_LINE.match(text.strip())):
+        # The first match is usually the import that pulled the name in, which
+        # shows nothing, so a few lines are read and the first line that is not
+        # import or package boilerplate wins.
+        if previous is None or (
+            BORING_LINE.match(previous[1]) and not BORING_LINE.match(text.strip())
+        ):
             hits[path] = (number, trim(text))
     return hits
 
 
-def ast_grep(args):
-    proc = subprocess.run(["ast-grep"] + args, capture_output=True, text=True)
-    if proc.returncode not in (0, 1):
-        die(f"ast-grep failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout) if proc.stdout.strip() else []
+def count_lines(path):
+    """File length, so the caller can budget how much reading it is signing up for."""
+    try:
+        with open(path, "rb") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return 0
 
 
 def cache_path(roots):
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     key = hashlib.sha1("\0".join(sorted(roots)).encode()).hexdigest()[:16]
-    return os.path.join(base, "context-builder", f"jvm-{key}.json")
+    return os.path.join(base, "context-builder", f"java-{key}.json")
 
 
 def cache_stamp(files):
@@ -384,122 +419,148 @@ def read_cache(roots, files):
             blob = json.load(handle)
     except (OSError, ValueError):
         return None
-    return blob.get("pairs") if blob.get("stamp") == cache_stamp(files) else None
+    return blob.get("index") if blob.get("stamp") == cache_stamp(files) else None
 
 
-def write_cache(roots, files, pairs):
+def write_cache(roots, files, index):
     path = cache_path(roots)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}"
         with open(tmp, "w") as handle:
-            json.dump({"stamp": cache_stamp(files), "pairs": pairs}, handle)
+            json.dump({"stamp": cache_stamp(files), "index": index}, handle)
         os.replace(tmp, path)
     except OSError:
         pass  # a cache that cannot be written is not an error worth reporting
 
 
-def declared_types(roots, files, use_cache=True):
-    """Map file -> type names it declares, and name -> files declaring it.
+def captures(query, node):
+    """capture name -> [node], across tree-sitter binding versions."""
+    if QueryCursor is not None:
+        return QueryCursor(query).captures(node)
+    return query.captures(node)
 
-    Uses ast-grep so that only real declarations count; the regex fallback also
-    matches prose in comments ("the record that ..."), which then fans out to
-    every file mentioning the word "that". The result is cached per source root
-    against the tree's newest mtime, because a research session runs this script
-    several times with different keywords and this pass is the same every time.
+
+def build_index(roots, files, use_cache=True):
+    """Parse every source once and record what it declares, imports and references.
+
+    Returns a dict of four maps plus a note:
+
+      decls[file]   -> [[name, line, source_line], ...]  in file order
+      members[file] -> [name, ...]                       funs and properties
+      imports[file] -> [simple name, ...]                what it pulls in
+      refs[file]    -> {name: edge kind}                 strongest edge per name
+
+    `refs` is filtered down to names that something in this tree actually
+    declares, because a reference to `String` or `Int` is not a cross-file edge
+    and keeping it would bloat both the cache and the fan-out. The whole thing is
+    cached against the tree's newest mtime, since a research session runs this
+    script several times with different keywords and the parse never changes.
     """
-    candidates = set(files)
-    note = None
-    pairs = read_cache(roots, files) if use_cache else None
-    if pairs is None:
-        pairs = []
-        if shutil.which("ast-grep"):
-            for rule in AST_RULES:
-                pairs += [
-                    [m["file"], m["text"]]
-                    for m in ast_grep(["scan", "--inline-rules", rule, "--json=compact"] + roots)
-                ]
-            for m in ast_grep(
-                ["run", "-p", AST_OBJECT_PATTERN, "-l", "kotlin", "--json=compact"] + roots
-            ):
-                name = m["metaVariables"]["single"].get("N", {}).get("text")
-                if name:
-                    pairs.append([m["file"], name])
-        else:
-            note = "`ast-grep` is unavailable; using an rg declaration regex instead."
-            out = rg(["-o", "--null", "--no-line-number", "-r", "$1", "-e", TYPE_DECL], roots)
-            for line in out.splitlines():
-                path, sep, name = line.partition("\0")
-                if sep and name:
-                    pairs.append([path, name])
-        if use_cache:
-            write_cache(roots, files, pairs)
+    cached = read_cache(roots, files) if use_cache else None
+    if cached is not None:
+        return cached, None
 
-    by_file, by_name = defaultdict(set), defaultdict(set)
-    for path, name in pairs:
-        if path in candidates:  # ast-grep does not honour our exclude globs
-            by_file[path].add(name)
-            by_name[name].add(path)
-    return by_file, by_name, note
+    language = Language(tree_sitter_java.language())
+    parser = Parser(language)
+    query = Query(language, JAVA_QUERY)
 
+    decls, members, imports, refs = {}, {}, {}, {}
+    unreadable = 0
+    for path in files:
+        try:
+            with open(path, "rb") as handle:
+                src = handle.read(MAX_PARSE_BYTES)
+        except OSError:
+            unreadable += 1
+            continue
+        lines = src.split(b"\n")
+        found = captures(query, parser.parse(src).root_node)
 
-@lru_cache(maxsize=512)
-def edge_patterns(name):
-    esc = re.escape(name)
-    return (
-        # `extends Foo`, `implements A, Foo` (Java) and `class Bar : Foo()` (Kotlin).
-        re.compile(rf"\b(?:extends|implements)\b[^={{;]*\b{esc}\b"),
-        re.compile(rf"\b(?:class|object|interface)\s+\w+[^=]*:[^=]*\b{esc}\b"),
-        # `new Foo(`, `Foo(`, `Foo<T>(` — construction or invocation.
-        re.compile(rf"\bnew\s+{esc}\b|\b{esc}\s*(?:<[^>]*>)?\s*\("),
-    )
+        def text_of(node):
+            return src[node.start_byte : node.end_byte].decode("utf-8", "replace")
 
+        file_decls = []
+        for node in found.get("decl", ()):
+            row = node.start_point[0]
+            raw = lines[row].decode("utf-8", "replace") if row < len(lines) else ""
+            file_decls.append([text_of(node), row + 1, trim(raw)])
+        if file_decls:
+            file_decls.sort(key=lambda d: d[1])
+            decls[path] = file_decls
 
-def edge_kind(name, line):
-    """Classify one reference to `name` from the source line carrying it."""
-    inherits, kotlin_super, call = edge_patterns(name)
-    if inherits.search(line):
-        return "implements" if "implements" in line else "extends"
-    if kotlin_super.search(line):
-        return "subtypes"
-    return "call" if call.search(line) else "mention"
+        names = {text_of(n) for n in found.get("member", ())}
+        if names:
+            members[path] = sorted(names)
 
+        # `import a.b.Zed;` and `import a.b.*;`: the simple name is what a type
+        # reference in the body will actually say, so that is what is indexed.
+        # A static import contributes its member name, which the declared-name
+        # filter below discards unless something really does declare it.
+        pulled = set()
+        for node in found.get("import", ()):
+            tail = text_of(node).rstrip(".*").rsplit(".", 1)[-1]
+            if tail:
+                pulled.add(tail)
+        if pulled:
+            imports[path] = sorted(pulled)
 
-def references(names, roots):
-    """Map type name -> {file: edge kind}, in a single ripgrep pass."""
-    hits = defaultdict(dict)
-    if not names:
-        return hits
-    pattern = r"\b(?:" + "|".join(sorted(re.escape(n) for n in names)) + r")\b"
-    out = rg(["-w", "--json", "-e", pattern], roots)
-    path = None
-    for line in out.splitlines():
-        event = json.loads(line)
-        if event["type"] == "begin":
-            path = event["data"]["path"].get("text")
-        elif event["type"] == "match" and path:
-            text = event["data"]["lines"].get("text", "")
-            for sub in event["data"]["submatches"]:
-                name = sub["match"]["text"]
-                kind = edge_kind(name, text)
-                known = hits[name].get(path)
+        edges = {}
+        for kind in ("extends", "implements", "call", "mention"):
+            for node in found.get(kind, ()):
+                name = text_of(node)
+                known = edges.get(name)
                 # Keep the strongest relationship seen anywhere in the file.
                 if known is None or EDGE_WEIGHT[kind] > EDGE_WEIGHT[known]:
-                    hits[name][path] = kind
-    return hits
+                    edges[name] = kind
+        if edges:
+            refs[path] = edges
+
+    declared = {name for entries in decls.values() for name, _, _ in entries}
+    refs = {
+        path: {n: k for n, k in edges.items() if n in declared}
+        for path, edges in refs.items()
+    }
+    refs = {p: e for p, e in refs.items() if e}
+
+    index = {"decls": decls, "members": members, "imports": imports, "refs": refs}
+    if use_cache:
+        write_cache(roots, files, index)
+    note = f"{unreadable} files could not be read" if unreadable else None
+    return index, note
 
 
-def imported_names(files):
-    """Map file -> type names it imports, i.e. its declared collaborators."""
-    imports = defaultdict(set)
-    if not files:
-        return imports
-    out = rg(["-o", "--null", "--no-line-number", "-r", "$1", "-e", IMPORT_DECL], files)
-    for line in out.splitlines():
-        path, sep, name = line.partition("\0")
-        if sep and name:
-            imports[path].add(name)
-    return imports
+def invert_refs(index, file_count):
+    """name -> {file: edge kind}, the reverse of index['refs'].
+
+    Names referenced across more of the repo than MAX_SYMBOL_SPREAD are dropped:
+    a `Logger` or a `Result` reaches most of the codebase and says nothing about
+    relevance, and letting it fan out drowns the files that do.
+    """
+    out = defaultdict(dict)
+    for path, edges in index["refs"].items():
+        for name, kind in edges.items():
+            out[name][path] = kind
+    # The percentage alone is not enough on a large repo: 20% of 2,000 files is
+    # 400, and a `Builder` referenced by 355 of them would sail through. The
+    # absolute ceiling is what actually keeps infrastructure types out.
+    cap = max(10, min(MAX_SYMBOL_FILES, int(file_count * MAX_SYMBOL_SPREAD)))
+    return {n: r for n, r in out.items() if len(r) <= cap}
+
+
+def unambiguous_definers(files_by_type):
+    """files_by_type minus the names that too many files declare.
+
+    `Builder`, `Config`, `Request` and `Response` are each declared in dozens to
+    hundreds of places in a large repo — usually as a nested class. An import of
+    one says nothing about which file is meant, so letting it fan out just hands
+    score to whichever file happens to declare a nested type of that name.
+    """
+    return {
+        name: paths
+        for name, paths in files_by_type.items()
+        if len(paths) <= AMBIGUOUS_DECL_FILES
+    }
 
 
 def config_mentions(patterns, root):
@@ -614,16 +675,7 @@ def test_partners(files):
     return partners
 
 
-def count_lines(path):
-    """File length, so the caller can budget how much reading it is signing up for."""
-    try:
-        with open(path, "rb") as handle:
-            return sum(1 for _ in handle)
-    except OSError:
-        return 0
-
-
-def score_keyword(keyword, files, roots, root, types_by_file, files_by_type, min_fuzzy):
+def score_keyword(keyword, files, roots, root, index, files_by_type, referrers, min_fuzzy):
     """Everything one keyword contributes on its own: score, evidence, vocabulary.
 
     Returned separately per keyword so that several keywords can be combined
@@ -631,22 +683,22 @@ def score_keyword(keyword, files, roots, root, types_by_file, files_by_type, min
     having to know which mode is in play.
     """
     pattern = keyword_pattern(keyword)
-    type_pattern = rf"(?:class|interface|object|enum|record)\s+\w*(?:{pattern})\w*"
-    member_pattern = rf"(?:fun|val|var|void|public|private|protected)\s+\w*(?:{pattern})\w*"
     sub_hits = counts(pattern, roots)
     word_hits = counts(pattern, roots, word=True)
-    type_hits = counts(type_pattern, roots)
-    member_hits = counts(member_pattern, roots)
-
-    # Anchor each result at the most useful line: the matching declaration if
-    # there is one, else the first mention, else whatever type the file declares
-    # (fan-out results have no mention of their own).
-    hits = first_hit(TYPE_DECL, roots)
-    hits.update(first_hit(pattern, roots))
-    hits.update(first_hit(type_pattern, roots))
 
     exact = re.compile(rf"^{pattern}$", re.I)
     partial = re.compile(pattern, re.I)
+
+    # Anchor each result at the most useful line. Least specific first: the file's
+    # own primary declaration, then its first textual mention of the keyword, then
+    # — best of all — the declaration whose name actually matches.
+    hits = {p: (d[0][1], d[0][2]) for p, d in index["decls"].items() if d}
+    hits.update(first_hit(pattern, roots))
+    for path, entries in index["decls"].items():
+        for name, line, text in entries:
+            if partial.search(name):
+                hits[path] = (line, text)
+                break
 
     score = defaultdict(float)
     why = defaultdict(list)
@@ -665,12 +717,16 @@ def score_keyword(keyword, files, roots, root, types_by_file, files_by_type, min
         if any(partial.search(seg) for seg in segments):
             score[path] += W_PATH
             why[path].append("keyword in package path")
-        if type_hits.get(path):
+        # Declarations and members come from the parse, so a match here is a real
+        # declaration — never a mention of the word in a comment above one.
+        matching_types = [n for n, _, _ in index["decls"].get(path, ()) if partial.search(n)]
+        if matching_types:
             score[path] += W_TYPE_DECL
-            why[path].append("declares a matching type")
-        if member_hits.get(path):
-            score[path] += W_MEMBER_DECL * min(member_hits[path], 3)
-            why[path].append("declares matching members")
+            why[path].append(f"declares {matching_types[0]}")
+        matching_members = [n for n in index["members"].get(path, ()) if partial.search(n)]
+        if matching_members:
+            score[path] += W_MEMBER_DECL * min(len(matching_members), 3)
+            why[path].append(f"declares {matching_members[0]}")
         n_word, n_sub = word_hits.get(path, 0), sub_hits.get(path, 0)
         if n_word:
             score[path] += W_WORD_HIT * min(n_word, HITS_CAP)
@@ -699,21 +755,31 @@ def score_keyword(keyword, files, roots, root, types_by_file, files_by_type, min
 
     exact_hit = {p for p, s in score.items() if s > 0}
     carrier = set()  # files that are named after / declare a fuzzy match
-    if fuzzy:
-        fuzzy_mentions = references(set(fuzzy), roots)  # one pass for every term
-        for term, sim in fuzzy.items():
-            weight = sim * FUZZY_DISCOUNT
-            for path in fuzzy_mentions.get(term, ()):
-                gain = W_FUZZY_MENTION
-                if stem_of(path) == term:
-                    gain += W_STEM_PART
+    for term, sim in fuzzy.items():
+        weight = sim * FUZZY_DISCOUNT
+        # Where the term lives, plus everything referencing it. The first half
+        # matters on its own: a term recovered from a file stem is not always an
+        # identifier anything references, and the file it names is the answer.
+        touching = set(referrers.get(term, {}))
+        touching |= set(files_by_type.get(term, ()))
+        touching |= {p for p in files if stem_of(p) == term}
+        for path in touching:
+            entries = index["decls"].get(path, ())
+            gain = W_FUZZY_MENTION
+            if stem_of(path) == term:
+                gain += W_STEM_PART
+                carrier.add(path)
+            if any(n == term for n, _, _ in entries):
+                gain += W_TYPE_DECL
+                # Only a file's *primary* declaration makes it the thing itself.
+                # A nested record of that name — one of forty inside a large API
+                # class — is evidence the file is a collaborator, not the answer,
+                # so it scores but stays out of the top tier.
+                if entries[0][0] == term:
                     carrier.add(path)
-                if term in types_by_file.get(path, ()):
-                    gain += W_TYPE_DECL
-                    carrier.add(path)
-                score[path] += gain * weight
-                if len(why[path]) < 3:
-                    why[path].append(f"≈{term} ({sim:.2f})")
+            score[path] += gain * weight
+            if len(why[path]) < 3:
+                why[path].append(f"≈{term} ({sim:.2f})")
 
     words = [p for p in keyword_parts(keyword) if len(p) >= 3]
     return {
@@ -734,8 +800,8 @@ def score_keyword(keyword, files, roots, root, types_by_file, files_by_type, min
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Rank Java/Kotlin source files to read for a keyword.",
-        epilog="Example: search-jvm-sources.py AuthToken ~/work/api",
+        description="Rank Java source files to read for a keyword.",
+        epilog="Example: search-java-sources.py AuthToken ~/work/api",
     )
     ap.add_argument("keyword", nargs="*", help="what you are looking for (camelCase or spaced)")
     ap.add_argument("--root", default=None, help="search root (default: . or the last argument)")
@@ -768,7 +834,7 @@ def main():
     )
     ap.add_argument("--no-tests", action="store_true", help="drop test sources entirely")
     ap.add_argument("--no-git", action="store_true", help="skip the git co-change pass")
-    ap.add_argument("--no-cache", action="store_true", help="ignore the declaration cache")
+    ap.add_argument("--no-cache", action="store_true", help="ignore the parsed-index cache")
     ap.add_argument("--no-evidence", action="store_true", help="omit the matched source lines")
     ap.add_argument("--json", action="store_true", help="emit JSON for jq")
     args = ap.parse_args()
@@ -802,21 +868,31 @@ def main():
     roots, note = find_source_roots(root)
     files = list_sources(roots)
     if not files:
-        die(f"no .java/.kt/.kts files under {', '.join(roots)}")
+        die(f"no .java files under {', '.join(roots)}")
     candidates = set(files)
     if from_file and from_file not in candidates:
         files.append(from_file)  # seeding from outside the source sets is allowed
         candidates.add(from_file)
 
-    rel_roots = ", ".join(os.path.relpath(r, root) for r in roots)
-    types_by_file, files_by_type, ast_note = declared_types(
-        roots, files, use_cache=not args.no_cache
+    # One capped label, used by both the success banner and the no-match message:
+    # a monorepo has hundreds of source sets and printing them all buries the
+    # sentence the reader actually needs.
+    rel_names = [os.path.relpath(r, root) for r in roots]
+    rel_roots = ", ".join(
+        rel_names[:4] + ([f"(+{len(rel_names) - 4} more)"] if len(rel_names) > 4 else [])
     )
-    if ast_note:
-        print(f"note: {ast_note}", file=sys.stderr)
+    index, index_note = build_index(roots, files, use_cache=not args.no_cache)
+    if index_note:
+        print(f"note: {index_note}", file=sys.stderr)
+    files_by_type = defaultdict(set)
+    for path, entries in index["decls"].items():
+        for name, _, _ in entries:
+            files_by_type[name].add(path)
+    referrers = invert_refs(index, len(files))
+    defining = unambiguous_definers(files_by_type)
 
     passes = [
-        score_keyword(kw, files, roots, root, types_by_file, files_by_type, args.fuzzy)
+        score_keyword(kw, files, roots, root, index, files_by_type, referrers, args.fuzzy)
         for kw in keywords
     ]
 
@@ -828,7 +904,7 @@ def main():
     mentions = defaultdict(int)
     # With no keyword at all (--from-file on its own) nothing has anchored the
     # results yet, so fall back to each file's own type declaration.
-    hits = {} if passes else first_hit(TYPE_DECL, roots)
+    hits = {} if passes else {p: (d[0][1], d[0][2]) for p, d in index["decls"].items() if d}
     exact_hit, carrier = set(), set()
     for one in passes:
         hits.update(one["hits"])
@@ -875,7 +951,7 @@ def main():
         score[from_file] += W_STEM_EXACT
         why[from_file].insert(0, "starting point")
         exact_hit.add(from_file)
-        own = [stem_of(from_file)] + sorted(types_by_file.get(from_file, ()))
+        own = [stem_of(from_file)] + [n for n, _, _ in index["decls"].get(from_file, ())]
         topical_words |= {re.escape(w) for w in own if len(w) >= 3}
     if not topical_words:  # every word was under three letters to gate on
         topical_words = {one["fallback_pattern"] for one in passes} or {r"(?!)"}
@@ -922,10 +998,6 @@ def main():
     for hop in range(args.depth):
         if not frontier:
             break
-        names = {n for f in frontier for n in types_by_file.get(f, ())}
-        referrers = references(names, roots)
-        imports = imported_names(frontier)
-
         weight = FANOUT[hop]
         # Hop 1 is unconditional: the direct collaborators of a seed are worth
         # reading whatever they are called. From hop 2 on, an ungated walk stops
@@ -936,15 +1008,15 @@ def main():
         shares = defaultdict(list)
         for src in frontier:
             share = score[src] * weight
-            for name in types_by_file.get(src, ()):
+            for name, _, _ in index["decls"].get(src, ()):
                 on_topic = not gated or bool(topical.search(name))
                 for ref, kind in referrers.get(name, {}).items():
                     if ref != src and (on_topic or ref in direct):
                         shares[ref].append(share * EDGE_WEIGHT[kind])
                         note_reason(ref, f"{EDGE_VERB[kind]} {name}")
-            for name in imports.get(src, ()):
+            for name in index["imports"].get(src, ()):
                 on_topic = not gated or bool(topical.search(name))
-                for defn in files_by_type.get(name, ()):
+                for defn in defining.get(name, ()):
                     if defn != src and (on_topic or defn in direct):
                         shares[defn].append(share)
                         note_reason(defn, f"defines {name}")
@@ -956,7 +1028,9 @@ def main():
         for path, gained in gains.items():
             score[path] += gained
             origin.setdefault(path, hop + 1)
-        frontier = [p for p in sorted(gains, key=gains.get, reverse=True) if p not in seen][: args.seeds]
+        frontier = [p for p in sorted(gains, key=gains.get, reverse=True) if p not in seen][
+            : args.seeds
+        ]
         seen.update(frontier)
 
     cochange = {}
@@ -1022,6 +1096,7 @@ def main():
                 "tier": TIERS[min(origin.get(path, 0), 2)][0],
                 "test": test,
                 "mentions": mentions.get(path, 0),
+                "declares": [n for n, _, _ in index["decls"].get(path, ())],
                 "why": why[path][:3],
                 "evidence": hit[1] if hit else None,
                 "tests": [os.path.relpath(t, root) for t in partners.get(path, ())],
@@ -1060,31 +1135,30 @@ def main():
             "a more specific keyword will read better",
             file=sys.stderr,
         )
-    shown = [os.path.relpath(r, root) for r in roots]
-    if len(shown) > 4:
-        shown = shown[:4] + [f"(+{len(roots) - 4} more)"]
     noun = "file" if len(rows) == 1 else "files"
     total = sum(r["lines_total"] for r in rows)
     joiner = " + " if args.all else " / "
     label = joiner.join(f"'{k}'" for k in keywords)
     if from_file:
         start = os.path.relpath(from_file, root)
-        label = f"{label} from {start}" if label else f"files around {start}"
+        label = f"{label} from @{start}" if label else f"files around @{start}"
     print(f"Reading list for {label} — {len(rows)} {noun}, ~{total:,} lines to read")
-    print(f"searched {len(files)} sources under {', '.join(shown)}")
+    print(f"searched {len(files)} sources under {rel_roots}")
     print("Read top-down; stop as soon as the question is answered.\n")
 
-    width = max(len(r["file"]) + len(str(r["line"] or "")) + 1 for r in rows)
+    width = max(len(r["file"]) + len(str(r["line"] or "")) + 2 for r in rows)
     width = min(width, 64)
     for tier, (name, blurb) in enumerate(TIERS):
         group = [r for r in rows if min(r["hops"], 2) == tier]
         if not group:
             continue
         tier_lines = sum(r["lines_total"] for r in group)
-        print(f"{name} ({len(group)} {'file' if len(group) == 1 else 'files'}, "
-              f"~{tier_lines:,} lines) — {blurb}")
+        print(
+            f"{name} ({len(group)} {'file' if len(group) == 1 else 'files'}, "
+            f"~{tier_lines:,} lines) — {blurb}"
+        )
         for row in group:
-            where = f"{row['file']}:{row['line']}" if row["line"] else row["file"]
+            where = f"@{row['file']}:{row['line']}" if row["line"] else f"@{row['file']}"
             marks = []
             if row["mentions"] > 1:  # a single mention is implied by being here
                 marks.append(f"{row['mentions']}×")
@@ -1097,14 +1171,14 @@ def main():
             if tier == 0 and row["evidence"] and not args.no_evidence:
                 print(f"       {row['evidence']}")
             for test in row["tests"]:
-                print(f"       tested by {test}")
+                print(f"       tested by @{test}")
         print()
 
     if config:
         print(f"ALSO MENTIONED ({len(config)} config/resource "
               f"{'file' if len(config) == 1 else 'files'}, not sources)")
         for entry in config:
-            print(f"       {entry['file']}:{entry['line']}")
+            print(f"       @{entry['file']}:{entry['line']}")
 
 
 if __name__ == "__main__":

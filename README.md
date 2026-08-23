@@ -28,8 +28,9 @@ file that mattered, or it was buried under forty that didn't.
   every claim `verified` / `inferred` / `assumed`, and order stable material
   first so the prefix stays cacheable.
 
-Bundled: **two reading-list scripts** ([below](#the-reading-list-scripts)) that
-collapse the whole narrowing pass into one command for JVM and TypeScript repos,
+Bundled: **three reading-list scripts** ([below](#the-reading-list-scripts)) that
+collapse the whole narrowing pass into one command for Java, Kotlin, and
+TypeScript repos,
 and a **`.scripts/` convention** — any command worth running twice gets saved as
 a parameterized script instead of retyped with slight variations every pass.
 
@@ -53,7 +54,8 @@ so the reader knows what it is signing up for.
 
 | Script | Reads |
 |---|---|
-| `search-jvm-sources.py` | `.java`, `.kt`, `.kts` |
+| `search-java-sources.py` | `.java` |
+| `search-kotlin-sources.py` | `.kt`, `.kts` |
 | `search-ts-sources.py` | `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs` |
 
 Same CLI, same flags, same output; they differ only where the languages do. They
@@ -61,11 +63,12 @@ ship inside the skill, so installing the skill installs them — and they run
 standalone just as well.
 
 ```bash
-skills/context-builder/scripts/search-jvm-sources.py <keyword>... [root] \
+skills/context-builder/scripts/search-java-sources.py <keyword>... [root] \
   [-n 200] [--depth 5] [--fuzzy 0.8] [--no-tests] [--from-file PATH] [--json]
 
 # once the skill is installed, the copies on hand are:
-~/.claude/skills/context-builder/scripts/search-jvm-sources.py AuthToken ~/work/api
+~/.claude/skills/context-builder/scripts/search-java-sources.py AuthToken ~/work/api
+~/.claude/skills/context-builder/scripts/search-kotlin-sources.py AuthToken ~/work/api
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py useAuth ~/work/app
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py billing . --no-tests
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py 'vector store' . --json \
@@ -73,7 +76,7 @@ skills/context-builder/scripts/search-jvm-sources.py <keyword>... [root] \
 ```
 
 From inside the skill body, they are invoked as
-`${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py` — Claude Code substitutes
+`${CLAUDE_SKILL_DIR}/scripts/search-java-sources.py` — Claude Code substitutes
 that variable with the skill's own directory, so the path works whether the skill
 is installed personally, per-project, or symlinked.
 
@@ -173,7 +176,7 @@ The skill assumes these are on your `PATH`:
 | [jq](https://jqlang.github.io/jq/) | JSON querying |
 | [yq](https://github.com/mikefarah/yq) | YAML querying |
 | [tree](https://oldmanprogrammer.net/source.php?dir=projects/tree) | directory orientation |
-| `python3` | runs the bundled `search-jvm-sources.py` (stdlib only) |
+| `python3` | runs the bundled reading-list scripts (stdlib only) |
 
 ```bash
 brew install ripgrep fd ast-grep jq yq tree
@@ -505,7 +508,7 @@ Write two files, because they have different lifespans:
 
 ### Adapting any of them
 
-- **JVM or TS/JS repo** — prepend: *"Run the bundled reading-list script first
+- **Java, Kotlin, or TS/JS repo** — prepend: *"Run the bundled reading-list script first
   (`~/.claude/skills/context-builder/scripts/search-ts-sources.py <keyword>`) and
   triage from its evidence column before opening anything."* That replaces the
   whole manual narrowing pass.

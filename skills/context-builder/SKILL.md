@@ -130,15 +130,18 @@ Pick based on what the task gives you:
 neighbours are: the interface/type it implements, its direct caller, and its
 configuration. Not its tests, not its siblings, not the whole package.
 
-### JVM and TypeScript: run the bundled script instead of rungs 2–4
+### Java, Kotlin, and TypeScript: run the bundled script instead of rungs 2–4
 
-Two bundled scripts do the whole narrowing pass in one command —
-`search-jvm-sources.py` for `.java`/`.kt`/`.kts`, `search-ts-sources.py` for
-`.ts`/`.tsx`/`.js`/`.jsx`. Same CLI, same flags, same output. They are not on
-`PATH`; invoke them from this skill's own directory:
+Three bundled scripts do the whole narrowing pass in one command —
+`search-java-sources.py` for `.java`, `search-kotlin-sources.py` for
+`.kt`/`.kts`, `search-ts-sources.py` for `.ts`/`.tsx`/`.js`/`.jsx`. Same CLI,
+same flags, same output. In a mixed JVM module, run the Java and Kotlin scripts
+separately — each reads only its own extensions. They are not on `PATH`; invoke
+them from this skill's own directory:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py <keyword>... [root]
+${CLAUDE_SKILL_DIR}/scripts/search-java-sources.py <keyword>... [root]
+${CLAUDE_SKILL_DIR}/scripts/search-kotlin-sources.py <keyword>... [root]
 ${CLAUDE_SKILL_DIR}/scripts/search-ts-sources.py <keyword>... [root]
 ```
 
@@ -173,8 +176,8 @@ Three properties make this the right first move rather than a fallback:
 
 Flags worth knowing: `--depth 0` for direct hits only, `--no-tests`, `-n` to
 shorten, `--fuzzy` to move the similarity bar (0.8 default), `--no-git` /
-`--no-evidence` / `--no-cache` to cut passes. For anything that isn't JVM or
-TS/JS, use the ladder above.
+`--no-evidence` / `--no-cache` to cut passes. For anything that isn't Java,
+Kotlin, or TS/JS, use the ladder above.
 
 ## Phase 3 — Reflect
 

@@ -30,9 +30,9 @@ and introduces typos that silently change the result.
   directory. **Create it yourself when it doesn't exist** (`mkdir -p .scripts`) —
   don't ask, don't fall back to running inline.
 - **Don't re-create what ships with this skill.**
-  `${CLAUDE_SKILL_DIR}/scripts/search-jvm-sources.py` and its TS twin already
-  cover "which files should I read for X" in JVM and TS repos — call them, don't
-  write a smaller version into `.scripts/`.
+  `${CLAUDE_SKILL_DIR}/scripts/search-java-sources.py` and its Kotlin and TS
+  twins already cover "which files should I read for X" in Java, Kotlin, and
+  TS/JS repos — call them, don't write a smaller version into `.scripts/`.
 - **Check `.scripts/` before writing a new one.** The script you need may already
   be there; extend it rather than adding a near-duplicate. `ls .scripts/` is the
   fastest check — and note that `rg --files` and `fd` do **not** list `.scripts/`
