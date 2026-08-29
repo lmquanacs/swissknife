@@ -1,4 +1,4 @@
-# context-builder
+# swissknife
 
 Personal Claude Code tooling.
 
