@@ -1,4 +1,4 @@
-# utilities
+# context-builder
 
 Personal Claude Code tooling.
 
