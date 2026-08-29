@@ -38,12 +38,25 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from functools import lru_cache
 
+def _reexec_in_skill_venv():
+    """Re-run under the skill's own venv, the one scripts/bootstrap.sh creates."""
+    venv_python = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".venv", "bin", "python3"
+    )
+    if os.environ.get("CONTEXT_BUILDER_BOOTSTRAPPED") or not os.path.exists(venv_python):
+        return  # already re-execed once, or there is no venv to re-exec into
+    os.environ["CONTEXT_BUILDER_BOOTSTRAPPED"] = "1"  # one attempt, never a loop
+    os.execv(venv_python, [venv_python, os.path.abspath(__file__), *sys.argv[1:]])
+
+
 try:
     from tree_sitter import Language, Parser, Query
     import tree_sitter_java
 except ImportError as exc:  # a hard dependency: there is no regex path any more
+    _reexec_in_skill_venv()  # returns only when that did not resolve it
     sys.exit(
         f"error: {exc.name} is required by this script.\n"
+        "  run this skill's scripts/bootstrap.sh once, or:\n"
         "  pip install tree-sitter tree-sitter-java\n"
         "Structural facts (declarations, imports, extends/implements edges) are\n"
         "read from a real parse; there is no regex fallback."

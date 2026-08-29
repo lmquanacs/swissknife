@@ -26,3 +26,6 @@ __pycache__/
 
 # Python virtualenv
 .venv/
+
+# context-builder eval runs and the skill-local parser venv
+skills/context-builder/evals/results/

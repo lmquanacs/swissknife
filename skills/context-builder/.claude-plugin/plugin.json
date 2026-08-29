@@ -1,0 +1,7 @@
+{
+  "name": "context-builder",
+  "description": "Discover, verify, and shape the minimum context needed before acting on a task.",
+  "version": "0.1.0",
+  "author": { "name": "quanle" },
+  "experimental": { "evals": "evals" }
+}

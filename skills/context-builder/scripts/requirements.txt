@@ -1,0 +1,12 @@
+# Parsers for the reading-list scripts. tree-sitter is a hard dependency:
+# declarations, imports and extends/implements edges come from a real parse,
+# not a regex. Install with ./bootstrap.sh, which puts these in scripts/.venv.
+#
+# Floors are the versions this skill was last verified against
+# (tree-sitter 0.26.0, java 0.23.5, kotlin 1.1.0, typescript 0.23.2).
+# The scripts handle both the 0.23/0.24 Query.captures API and the
+# QueryCursor API from 0.25 on, so either side of that split is fine.
+tree-sitter>=0.23
+tree-sitter-java>=0.23.5
+tree-sitter-kotlin>=1.1.0
+tree-sitter-typescript>=0.23.2

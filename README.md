@@ -176,7 +176,7 @@ The skill assumes these are on your `PATH`:
 | [jq](https://jqlang.github.io/jq/) | JSON querying |
 | [yq](https://github.com/mikefarah/yq) | YAML querying |
 | [tree](https://oldmanprogrammer.net/source.php?dir=projects/tree) | directory orientation |
-| `python3` | runs the bundled reading-list scripts (stdlib only) |
+| `python3` (3.9+) | runs the bundled reading-list scripts |
 
 ```bash
 brew install ripgrep fd ast-grep jq yq tree
@@ -184,6 +184,12 @@ brew install ripgrep fd ast-grep jq yq tree
 
 Note that ast-grep's binary is `ast-grep`. It also ships an `sg` alias, but that
 one is deprecated and prints a warning on every invocation.
+
+The reading-list scripts need three tree-sitter packages on top of `python3` —
+they read declarations and import edges from a real parse, and there is no regex
+fallback. Those are not brew packages; `bootstrap.sh` installs them into a venv
+the scripts own, which is [step 2 of installing](#2-install-the-parsers). You do
+not need to install them by hand.
 
 One optional escalation, not assumed present:
 
@@ -204,10 +210,14 @@ Claude Code discovers skills in two places: `~/.claude/skills/` (available in
 every project) and `<project>/.claude/skills/` (that project only). The command
 you type comes from the **directory name**, so the installed directory must be
 called `context-builder` for `/context-builder` to work. This repo keeps skills
-in a plain top-level `skills/` directory, so pick one of the following to make it
-visible to Claude.
+in a plain top-level `skills/` directory, so installing is two steps: make the
+directory visible to Claude, then install the parsers the bundled scripts need.
 
-### Symlink for personal use — recommended
+### 1. Make it visible to Claude
+
+Pick one of the three.
+
+#### Symlink for personal use — recommended
 
 Keeps this repo as the single source of truth. Edits to `SKILL.md`, the
 `references/`, and the scripts take effect immediately, and `git pull` updates
@@ -218,7 +228,7 @@ mkdir -p ~/.claude/skills
 ln -s "$(pwd)/skills/context-builder" ~/.claude/skills/context-builder
 ```
 
-### Symlink into a single project
+#### Symlink into a single project
 
 When you only want it in one repo, and/or want to commit it for teammates:
 
@@ -234,7 +244,7 @@ directory in and commit it instead:
 cp -R skills/context-builder /path/to/project/.claude/skills/
 ```
 
-### Copy instead of symlink
+#### Copy instead of symlink
 
 If you'd rather pin a version and not have it move under you:
 
@@ -242,6 +252,24 @@ If you'd rather pin a version and not have it move under you:
 mkdir -p ~/.claude/skills
 cp -R skills/context-builder ~/.claude/skills/
 ```
+
+### 2. Install the parsers
+
+Once, per machine. The scripts re-exec into this venv themselves, so nothing
+needs activating afterwards and it does not matter which shell you run them from.
+
+```bash
+~/.claude/skills/context-builder/scripts/bootstrap.sh
+```
+
+It creates `scripts/.venv`, installs `tree-sitter` and the Java, Kotlin and
+TypeScript grammars from `scripts/requirements.txt`, and verifies they import.
+Re-running it when everything is already in place does nothing; `--force`
+rebuilds the venv from scratch.
+
+The venv is gitignored, so it does not travel with a `git clone` or a `cp -R` —
+run bootstrap on each machine. Skipping this step is not silent: the scripts
+exit with `error: tree_sitter is required by this script` and name the fix.
 
 ### Verify
 
@@ -253,6 +281,22 @@ already-running session won't see it. Then either invoke it by name with
 If it doesn't show up, check that the file is at
 `~/.claude/skills/context-builder/SKILL.md` (the directory name and the `name:`
 field in the frontmatter should match) and that the YAML frontmatter is intact.
+
+`claude plugin list` confirms it from outside a session:
+
+```
+Skills-directory plugins (.claude/skills/*):
+
+  ❯ context-builder@skills-dir
+    Version: 0.1.0
+    Scope: user
+    Status: ✔ loaded
+```
+
+And `scripts/score-skill.sh` checks the install end to end — that every path
+`SKILL.md` names exists, that the scripts are executable with the parsers
+importable, and that a fuzzy keyword still lands on the right file. It exits
+non-zero on the first thing it finds, so it also works as a commit gate.
 
 ## Use case prompt templates
 
@@ -518,22 +562,30 @@ Write two files, because they have different lifespans:
 
 ## Should this be a plugin?
 
-**Not yet — and deferring costs nothing.**
+**Half-way, deliberately.** There is a manifest at
+`skills/context-builder/.claude-plugin/plugin.json`, which is why the skill shows
+up as `context-builder@skills-dir` in `claude plugin list` rather than as an
+anonymous directory. That much is free: it costs one small JSON file, changes no
+paths, and the `ln -s` install above still works exactly as before.
 
-Claude Code plugins bundle skills, slash commands, subagents, hooks, and MCP
-servers into one installable unit, distributed through a marketplace repo. That's
-worth the ceremony when you have several things to ship, want versioned updates
-across machines, or are handing them to other people.
+What it buys is tooling that addresses the skill *by name* — `claude plugin
+details context-builder@skills-dir` for a token-cost projection, and
+`claude plugin eval .` for the scored behavioural runs in
+`skills/context-builder/evals/`.
 
-Right now this repo has exactly one skill, and a plugin would add a manifest, a
-marketplace entry, and a multi-step install flow to replace a one-line `ln -s`.
+What it does not buy, yet, is distribution. Installing by name from a marketplace
+needs a `.claude-plugin/marketplace.json` at the repo root and the manifest moved
+up beside it. That move is still purely additive — a plugin expects its skills in
+a top-level `skills/` directory, which is the layout here already, so nothing
+moves except the manifest itself.
 
-The reason there's no hurry: a plugin expects its skills in a top-level `skills/`
-directory, which is exactly the layout here already. Converting later is purely
-additive — add a `.claude-plugin/plugin.json` manifest at the root and nothing
-moves, no paths change, and the symlink instructions above keep working for
-anyone who prefers them.
+One wrinkle worth knowing if you make that move: with the manifest inside the
+skill directory, `plugin details` reports `Skills (0)` and `~0 tok`, because it
+looks for `skills/<name>/SKILL.md` beneath the manifest and this `SKILL.md` sits
+at the manifest's own root. Loading is unaffected — the skill works today — but
+the token accounting is blind. Moving the manifest to the repo root fixes the
+count and enables the marketplace path in the same step.
 
-So the trigger to revisit is adding a second skill, a slash command, or a
-subagent — or wanting someone else to install this by name rather than by
-cloning.
+So the trigger to finish the job is wanting someone else to install this by name
+rather than by cloning — or adding a second skill, a slash command, or a
+subagent to ship alongside it.

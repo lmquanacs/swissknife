@@ -1,6 +1,6 @@
 ---
 name: context-builder
-description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode for dataflow questions) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
+description: Discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or files you haven't read — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern, deciding what to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode) and ships reading-list scripts that rank files by keyword for Java, Kotlin, and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or asks why an agent's answer was wrong or expensive. Prefer it over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is what it replaces.
 ---
 
 # Context Builder
@@ -137,13 +137,22 @@ Three bundled scripts do the whole narrowing pass in one command —
 `.kt`/`.kts`, `search-ts-sources.py` for `.ts`/`.tsx`/`.js`/`.jsx`. Same CLI,
 same flags, same output. In a mixed JVM module, run the Java and Kotlin scripts
 separately — each reads only its own extensions. They are not on `PATH`; invoke
-them from this skill's own directory:
+them by path from this skill's own directory:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/search-java-sources.py <keyword>... [root]
-${CLAUDE_SKILL_DIR}/scripts/search-kotlin-sources.py <keyword>... [root]
-${CLAUDE_SKILL_DIR}/scripts/search-ts-sources.py <keyword>... [root]
+SKILL_DIR="${CLAUDE_SKILL_DIR:-$HOME/.claude/skills/context-builder}"
+"$SKILL_DIR/scripts/bootstrap.sh"                              # once per machine
+"$SKILL_DIR/scripts/search-java-sources.py" <keyword>... [root]
+"$SKILL_DIR/scripts/search-kotlin-sources.py" <keyword>... [root]
+"$SKILL_DIR/scripts/search-ts-sources.py" <keyword>... [root]
 ```
+
+`bootstrap.sh` is a one-time setup: it creates `scripts/.venv` and installs the
+tree-sitter parsers the scripts require, because structure comes from a real
+parse and there is no regex fallback. Nothing needs activating afterwards — the
+scripts re-exec into that venv themselves. A script exiting with
+`tree_sitter is required by this script` means bootstrap has not run yet; run it
+and retry rather than falling back to the ladder.
 
 The output is a reading list, at most 200 files, numbered in reading order and
 tiered **READ FIRST / THEN / SKIM IF NEEDED** by how each file was found. Every
@@ -352,6 +361,12 @@ Drop empty sections rather than writing "N/A". For Micro-tier tasks, Objective
 - `references/discovery-recipes.md` — Phase 2 search patterns by question type
   (data flow, config resolution, error origin, convention discovery), plus the
   files that are almost never worth reading and a cost reference.
+- `prompts/` — five ready-to-send task prompts that drive this whole loop:
+  `01-before-debugging`, `02-before-planning-implementing`,
+  `03-before-reviewing-code`, `04-before-refactoring`, `05-for-documentation`.
+  Each fixes the budget tier, states what discovery must answer, and names the
+  result file to write. Offer the matching one when the user's task fits its
+  shape.
 - `references/pack-templates.md` — Phase 4 variants: delta packs (task already in
   progress), handoff packs (another agent or a fresh session), review packs
   (evidence-first, for critique), and working sets for long-running loops.
