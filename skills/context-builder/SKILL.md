@@ -1,6 +1,6 @@
 ---
 name: context-builder
-description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode for dataflow questions) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or architecture-rule tests (Konsist, ArchUnit), or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
+description: Systematically discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or file sets you haven't read yet — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern across many files, deciding which files to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode for dataflow questions) and ships reading-list scripts that turn a keyword into a ranked file list for Java/Kotlin and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or asks why an agent's answer was wrong or expensive. Prefer this skill over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is exactly what it exists to replace.
 ---
 
 # Context Builder
@@ -339,7 +339,6 @@ Drop empty sections rather than writing "N/A". For Micro-tier tasks, Objective
 | Chasing every new identifier | Chase only what an open question depends on |
 | Investigating an adjacent problem you spotted | One line at the end, after the answer |
 | Regexing toward a dataflow answer | A Semgrep taint rule, or log it open |
-| Inferring JVM conventions from sample files | Read the Konsist/ArchUnit tests — they're enforced |
 | Silently guessing a gap | Log it under Open questions |
 | One pack for a sprawling task | Split the task, one pack each |
 | Re-reading a file already in context | Cite what you already have |

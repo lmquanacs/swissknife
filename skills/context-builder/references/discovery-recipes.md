@@ -130,17 +130,6 @@ Three similar files, skimmed for structure, beats one file read closely. The
 config and CONTRIBUTING files state conventions directly and cost almost
 nothing — check them before inferring anything.
 
-On JVM repos, the conventions may already be executable:
-
-```bash
-rg -l 'Konsist\.scopeFrom|com\.tngtech\.archunit'   # Kotlin / Java arch tests
-```
-
-Konsist (Kotlin) and ArchUnit (Java) tests state layering, naming, and package
-boundaries as code that runs — the answer to this recipe, and the tests your
-change has to keep green. Read them before the three sample files, and cite them
-`[verified]`: they're enforced, not observed.
-
 > Two `fd` gotchas: the pattern comes first and the path second, so `fd -e ts src`
 > searches the *current* directory for files named `src` — you want `fd -e ts . src`.
 > And `-g` takes one value; a second `-g` is parsed as a search path. Put the
@@ -153,12 +142,9 @@ rg -lw 'SymbolName' | wc -l              # blast radius as a number
 rg -cw 'SymbolName'                      # per-file counts — where it concentrates
 git log --oneline -8 -- <path>           # is this hot or frozen?
 rg -lw 'SymbolName' -g '**/*test*'       # existing coverage
-rg -l 'Konsist\.scopeFrom|archunit'      # JVM: arch rules that will fail the change
 ```
 
-Count first, read second. Architecture tests are cheaper to read than to trip:
-a Konsist rule pinning a package boundary constrains the refactor, it isn't a
-test you fix afterwards. If the blast radius is large, that count *is* the
+Count first, read second. If the blast radius is large, that count *is* the
 finding — record it and don't read all the sites.
 
 ## Recipe 7 — Unfamiliar repo, no anchor

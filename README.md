@@ -198,11 +198,6 @@ brew install semgrep
 The skill checks for it only when a flow question comes up, and logs that
 question as open if it's missing. Regex is not a fallback for dataflow.
 
-[Konsist](https://docs.konsist.lemonappdev.com/) (Kotlin) and
-[ArchUnit](https://www.archunit.org/) (Java) aren't installed — they're *found*.
-When a JVM repo already encodes layering and naming as tests, those tests are
-the conventions, and get read rather than inferred from sample files.
-
 ## Installing the skill
 
 Claude Code discovers skills in two places: `~/.claude/skills/` (available in
@@ -445,8 +440,6 @@ Count before you read:
 - `rg -cw '<symbol>'` for where it concentrates
 - `ast-grep` for the structural sites — not regex, so multi-line calls aren't
   missed and matches inside comments and strings aren't counted
-- `rg -l 'Konsist\.scopeFrom|archunit'` on a JVM repo — architecture rules are
-  constraints on the refactor, not tests to fix afterwards
 
 If the blast radius is over ~15 files, stop and give me the number instead of
 reading them all — that count is itself the finding. Budget: Deep.
@@ -456,8 +449,7 @@ Give me back:
 - every site grouped by the kind of change it needs — mechanical / needs
   thought / ambiguous — each as a `path:line` anchor
 - the interface or contract that pins the current shape, quoted exactly
-- what test coverage already exists over the affected sites, plus any
-  Konsist/ArchUnit rule the refactor would violate, quoted
+- what test coverage already exists over the affected sites
 - Open questions for any site you cannot classify
 
 Then propose an edit order, safest first. Don't start editing.
@@ -485,9 +477,7 @@ the manifest through jq/yq, recently-changed files — then anchor out from the
 entry point. Budget: Deep, but stop early if the map converges sooner.
 
 Read interfaces, types, and configs. Skip tests and implementation bodies unless
-a behavior is documented nowhere else. Exception on JVM repos: Konsist or
-ArchUnit tests are the architecture written as code — read them, and cite them
-[verified], because they're enforced rather than observed.
+a behavior is documented nowhere else.
 
 Give me back:
 - a Map: `path` plus one line each, for every component that earns a mention

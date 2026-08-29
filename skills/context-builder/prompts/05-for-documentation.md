@@ -17,9 +17,7 @@ the manifest through jq/yq, recently-changed files — then anchor out from the
 entry point. Budget: Deep, but stop early if the map converges sooner.
 
 Read interfaces, types, and configs. Skip tests and implementation bodies unless
-a behavior is documented nowhere else. Exception on JVM repos: Konsist or
-ArchUnit tests are the architecture written as code — read them, and cite them
-`[verified]`, because they're enforced rather than observed.
+a behavior is documented nowhere else.
 
 Give me back:
 - a Map: `path` plus one line each, for every component that earns a mention
