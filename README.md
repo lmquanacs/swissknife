@@ -213,6 +213,28 @@ called `context-builder` for `/context-builder` to work. This repo keeps skills
 in a plain top-level `skills/` directory, so installing is two steps: make the
 directory visible to Claude, then install the parsers the bundled scripts need.
 
+### The short way
+
+```bash
+./install.sh                        # symlink into ~/.claude/skills, all projects
+./install.sh --project ~/code/app   # or into one project's .claude/skills
+./install.sh --copy                 # copy instead of symlink, to pin a version
+```
+
+It does both steps and then verifies: symlinks (or copies) each skill in
+`skills/`, runs `bootstrap.sh` to install the parsers, and finishes with
+`score-skill.sh` so a broken install fails now rather than mid-task. It exits
+non-zero if anything is wrong.
+
+Re-running it is how you reinstall. An existing same-name skill is cleared
+first — a symlink is dropped, while a real directory might hold edits this repo
+has never seen, so that one is moved to `<name>.bak-<timestamp>` and the path is
+printed for you to delete. If you install to project scope while a user-scope
+copy exists, it says so: project scope wins, and the other is silently shadowed
+otherwise.
+
+The rest of this section is the same thing by hand.
+
 ### 1. Make it visible to Claude
 
 Pick one of the three.
