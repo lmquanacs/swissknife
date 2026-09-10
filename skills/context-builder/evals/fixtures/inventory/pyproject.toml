@@ -1,0 +1,6 @@
+[project]
+name = "inventory"
+version = "0.1.0"
+
+[tool.inventory]
+retry_attempts = 3

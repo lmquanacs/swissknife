@@ -1,6 +1,6 @@
 ---
 name: context-builder
-description: Discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or files you haven't read — "where is X defined", "how does Y work", bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern, deciding what to read first, code review, or writing a brief or handoff for another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode) and ships reading-list scripts that rank files by keyword for Java, Kotlin, and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, taint or dataflow tracking, or asks why an agent's answer was wrong or expensive. Prefer it over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is what it replaces.
+description: Discover, verify, and shape the minimum context needed before acting on a task. Use whenever you must understand code, repos, docs, or files you haven't read — "where is X defined", "how does Y work", starting work in an unfamiliar area or codebase, bug hunts, tracing call sites and data flow, cross-file refactors, auditing a pattern, deciding what to read first, code review, or briefing a subagent or another agent. Covers search-tool craft (rg, fd, ast-grep, jq, yq, tree, plus Semgrep taint mode) and ships reading-list scripts that rank files by keyword for Java, Kotlin, Python, and TypeScript/JavaScript repos. Also use when the user mentions context engineering, context window, token budget, prompt caching, cost per task, running low on context, taint or dataflow tracking, or asks why an agent's answer was wrong or expensive. Prefer it over ad-hoc file reading any time a task touches more than two files — opening files to "get oriented" is what it replaces.
 ---
 
 # Context Builder
@@ -63,6 +63,7 @@ Needs more than Deep? The task is too big. Split it, one pack per piece.
 | Something emitted JSON | `jq` |
 | Something is YAML (config, CI, compose) | `yq` |
 | I have <10 candidate files and need to understand them | the `Read` tool |
+| I have >10, and the reading *is* the work | a subagent, briefed (below) |
 
 Use `rg` for text and `ast-grep` for structure. Switch to `ast-grep` the moment a
 regex would need to care about whitespace, line breaks, nesting, or balanced
@@ -93,6 +94,16 @@ Each rung costs ~10× the one below. Exhaust a rung before going up.
 5. **Ranged reads** — the 40 lines around the hit, not the 900-line file.
 6. **Full reads** — only files that are both small and central: interfaces,
    configs, schemas, the one class the task is about.
+7. **Delegated reads** — when rungs 5–6 would pull more than ~10 files into
+   *this* window, send the reading to a subagent instead. Its reads cost its
+   context, not yours; what comes back is a page of anchors.
+
+Rung 7 is the one rung that doesn't cost 10× the one below — it costs a cold
+start. A subagent re-derives what you already know, so it loses on anything
+small. Delegate when the read volume is real: give it your Phase 1 questions
+verbatim, name the tier, and require the Findings format from Phase 4 —
+`[verified] claim — path:line`. A subagent asked to "look into" something
+returns prose you then have to verify, which is worse than reading it yourself.
 
 ### Seed
 
@@ -106,16 +117,17 @@ Follow references one hop at a time. From an anchor, take the interface it
 implements, its direct caller, and its configuration. Not its tests, not its
 siblings, not the whole package.
 
-### Java, Kotlin, TS/JS: run the bundled script instead of rungs 2–4
+### Java, Kotlin, Python, TS/JS: run the bundled script instead of rungs 2–4
 
 One command does the whole narrowing pass: `search-java-sources.py` (`.java`),
-`search-kotlin-sources.py` (`.kt`/`.kts`), `search-ts-sources.py`
-(`.ts`/`.tsx`/`.js`/`.jsx`). Not on `PATH` — invoke by path:
+`search-kotlin-sources.py` (`.kt`/`.kts`), `search-python-sources.py`
+(`.py`/`.pyi`), `search-ts-sources.py` (`.ts`/`.tsx`/`.js`/`.jsx`). Not on
+`PATH` — invoke by path:
 
 ```bash
 SKILL_DIR="${CLAUDE_SKILL_DIR:-$HOME/.claude/skills/context-builder}"
 "$SKILL_DIR/scripts/bootstrap.sh"                          # once per machine
-"$SKILL_DIR/scripts/search-ts-sources.py" <keyword>... [root]
+"$SKILL_DIR/scripts/search-ts-sources.py" <keyword>... [root]   # or -python-, -java-, -kotlin-
 ```
 
 You get a reading list tiered **READ FIRST / THEN / SKIM IF NEEDED**, each row
@@ -184,6 +196,18 @@ the tier budget is spent. Stop early, before the budget is spent, when:
 - **Narrowing twice still leaves 100+ hits.** Ask which subsystem, not which regex.
 - **The answer depends on intent that isn't in the code** — which design they
   want, whether a behavior is a bug or deliberate.
+
+### When the window is already tight
+
+Context pressure changes what to do next, not just how much of it to do.
+
+- **Shape early.** Write the pack now, from what you have. A pack survives
+  compaction; scrollback doesn't.
+- **Re-anchor, don't re-read.** After a compaction the pack *is* your context.
+  Cite it. Re-opening a file you already summarized pays for it twice.
+- **Delegate what's left** (rung 7), with the pack as the subagent's brief.
+- **Never spend the last of the window on discovery.** Leave enough room to act,
+  or you finish with perfect context and no budget to use it.
 
 ### Ask a question that carries the search
 
@@ -264,6 +288,7 @@ Next action is the whole pack. Run the self-check in
 | A fourth synonym after three rounds | Stop: ask, or log it as an open question |
 | Pasting large excerpts | Anchor + one-line claim |
 | Chasing every new identifier | Chase only what an open question depends on |
+| Pulling 20 files into this window yourself | Delegate the reading, take back anchors |
 | Investigating an adjacent problem you spotted | One line at the end, after the answer |
 | Regexing toward a dataflow answer | A Semgrep taint rule, or log it open |
 | Silently guessing a gap | Log it under Open questions |

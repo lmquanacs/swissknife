@@ -13,7 +13,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 venv="$here/.venv"
 requirements="$here/requirements.txt"
-modules="tree_sitter, tree_sitter_java, tree_sitter_kotlin, tree_sitter_typescript"
+modules="tree_sitter, tree_sitter_java, tree_sitter_kotlin, tree_sitter_typescript, tree_sitter_python"
 
 if [[ "${1:-}" == "--force" ]]; then
   rm -rf "$venv"

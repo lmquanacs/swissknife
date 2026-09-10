@@ -54,18 +54,36 @@ nonexec=$(fd -t f -e py -e sh . scripts | while read -r p; do [[ -x "$p" ]] || e
 [[ -z "$nonexec" ]]; check "scripts executable" $? "${nonexec:-all +x}"
 
 if [[ -x scripts/.venv/bin/python3 ]] \
-   && scripts/.venv/bin/python3 -c 'import tree_sitter, tree_sitter_java, tree_sitter_kotlin, tree_sitter_typescript' 2>/dev/null; then
+   && scripts/.venv/bin/python3 -c 'import tree_sitter, tree_sitter_java, tree_sitter_kotlin, tree_sitter_typescript, tree_sitter_python' 2>/dev/null; then
   check "parser deps installed" 0 "scripts/.venv"
 else
   check "parser deps installed" 1 "run scripts/bootstrap.sh"
 fi
 
-# --- the end-to-end claim: a fuzzy keyword lands on the right file
+# --- the end-to-end claim: a fuzzy keyword lands on the right file.
+# One fixture per grammar family, because a broken query fails silently — it
+# matches nothing rather than erroring, and the list still prints.
 if out=$(./scripts/search-ts-sources.py retrypolicy evals/fixtures/shop 2>&1); then
   grep -q 'READ FIRST' <<<"$out" && grep -q 'settings.ts' <<<"$out"
-  check "reading list smoke test" $? "fuzzy 'retrypolicy' -> settings.ts"
+  check "reading list smoke test (ts)" $? "fuzzy 'retrypolicy' -> settings.ts"
 else
-  check "reading list smoke test" 1 "script exited non-zero"
+  check "reading list smoke test (ts)" 1 "script exited non-zero"
+fi
+
+if out=$(./scripts/search-python-sources.py retrypolicy evals/fixtures/inventory 2>&1); then
+  grep -q 'READ FIRST' <<<"$out" && grep -q 'settings.py' <<<"$out"
+  check "reading list smoke test (py)" $? "fuzzy 'retrypolicy' -> settings.py"
+else
+  check "reading list smoke test (py)" 1 "script exited non-zero"
+fi
+
+# The Python edges a regex could not produce: a subclass across a relative
+# import, and a decorator reference. Guards the query, not just the ranking.
+if out=$(./scripts/search-python-sources.py BaseProcessor evals/fixtures/inventory 2>&1); then
+  grep -q 'subclasses BaseProcessor' <<<"$out" && grep -q 'decorated by audited' <<<"$out"
+  check "python structural edges" $? "subclasses + decorated by"
+else
+  check "python structural edges" 1 "script exited non-zero"
 fi
 
 echo

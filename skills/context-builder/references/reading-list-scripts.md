@@ -1,6 +1,6 @@
 # Reading-List Scripts
 
-For Java, Kotlin, and TypeScript/JavaScript repos, one bundled script replaces
+For Java, Kotlin, Python, and TypeScript/JavaScript repos, one bundled script replaces
 rungs 2–4 of the Phase 2 ladder (`fd` on names → `rg -l`/`rg -c` → `ast-grep`
 confirmation). It parses the repo and returns a ranked reading list instead of
 a pile of hits.
@@ -13,11 +13,20 @@ narrow one that came back too wide.
 |---|---|---|
 | Java | `search-java-sources.py` | `.java` |
 | Kotlin | `search-kotlin-sources.py` | `.kt`, `.kts` |
+| Python | `search-python-sources.py` | `.py`, `.pyi` |
 | TypeScript / JavaScript | `search-ts-sources.py` | `.ts`, `.tsx`, `.js`, `.jsx` |
 
-Same CLI, same flags, same output across all three. In a mixed JVM module run
+Same CLI, same flags, same output across all four. In a mixed JVM module run
 the Java and Kotlin scripts **separately** — each reads only its own extensions,
-so a Kotlin service with Java interfaces needs both runs.
+so a Kotlin service with Java interfaces needs both runs. The same applies to a
+Python service with a TypeScript frontend.
+
+What counts as an edge differs by language, because what a module *is* differs.
+Java and Kotlin fan out along types; TS/JS along exported symbols and resolved
+import paths; Python along module-level definitions and dotted import paths,
+with `subclasses` and `decorated by` as its two strongest edges — a decorator
+reference is the Python signal that a file is genuinely wired into a framework
+rather than merely naming it.
 
 ## Invocation
 
@@ -28,6 +37,7 @@ SKILL_DIR="${CLAUDE_SKILL_DIR:-$HOME/.claude/skills/context-builder}"
 "$SKILL_DIR/scripts/bootstrap.sh"                              # once per machine
 "$SKILL_DIR/scripts/search-java-sources.py"   <keyword>... [root]
 "$SKILL_DIR/scripts/search-kotlin-sources.py" <keyword>... [root]
+"$SKILL_DIR/scripts/search-python-sources.py" <keyword>... [root]
 "$SKILL_DIR/scripts/search-ts-sources.py"     <keyword>... [root]
 ```
 

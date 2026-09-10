@@ -46,9 +46,15 @@ verified while writing this:
 | `03-pack-fidelity` | Packs without `path:line` anchors or confidence labels, and packs that archive instead of brief |
 | `04-stop-discipline` | The hardest instruction in the skill to make stick: stop after three rounds and ask a question that carries the search, rather than inventing the thing the user named |
 | `05-reading-list-script` | The bundled scripts being documented but not runnable — this case fails if `bootstrap.sh` isn't run when the parsers are missing |
+| `06-budget-adherence` | The two phases nothing else grades: a budget tier stated but not held, and findings reported with no ledger saying which questions are still open |
 
 01 and 02 are a pair: a description tuned until 01 passes will eventually break
 02. Read their scores together, never one alone.
+
+02 and 06 are the other pair, and they pull in opposite directions: 02 fails an
+agent that spends a discovery round it didn't need, 06 fails one that reads
+everything rather than bounding the job. A change that improves either one at
+the other's expense has moved the problem, not fixed it.
 
 ## Fixture
 
@@ -60,3 +66,10 @@ the point: on a fixture this size the with/without delta shows up in the token
 count and the anchor discipline, not in whether the answer was reachable.
 
 `fixtures/shop` contains no circuit breaker, which is what case 04 tests.
+
+`fixtures/inventory` is the Python counterpart used by case 06 and by
+`score-skill.sh`: nine sources under `src/inventory` with the same planted
+double-retry bug, plus the two edges a regex cannot produce — `ChargeProcessor`
+subclassing `BaseProcessor` across a relative import, and the `@audited`
+decorator. A query that silently stops matching would still print a plausible
+reading list, so those two edges are asserted by name in the mechanical score.
