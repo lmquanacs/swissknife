@@ -182,3 +182,21 @@ the pack.
 Prefer re-running a search over carrying its output. An anchor plus the command
 that produced it (`rg -lw 'SymbolName'` — 14 files) costs a line; the listing
 costs a hundred, and the consumer can regenerate it on demand.
+
+---
+
+## Self-check before handing off
+
+Run this against any pack, in any variant above, before it leaves your hands.
+
+- Could someone act correctly on this pack **without opening any other file**?
+- Is anything in here that the task doesn't depend on? Cut it.
+- Is any claim stated flatly that I actually inferred?
+- Does every specific claim carry a `path:line` anchor?
+- Are `[verified]` and `[inferred]` labels present, and does each `[inferred]`
+  one say what the inference rests on?
+- Is the pack within its tier's budget above?
+
+The first and third questions catch the two failures that actually hurt
+downstream: a pack that forces the consumer back into discovery, and an
+inference that reads as a fact.
