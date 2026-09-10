@@ -123,4 +123,4 @@ rather than read.
 | Nothing clears the fuzzy bar | Read the error: it names the closest identifiers in the repo. That is your vocabulary answer |
 | Result is too wide | Add a second keyword with `--all`, or `--depth 0` |
 | Result is all tests | `--no-tests` |
-| Language is not Java/Kotlin/TS/JS | Use the Phase 2 ladder in SKILL.md; there is no script for it |
+| Language is not Java/Kotlin/Python/TS/JS | Use the Phase 2 ladder in SKILL.md; there is no script for it |
