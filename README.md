@@ -1,4 +1,4 @@
-# swissknife
+# context-builder
 
 Personal Claude Code tooling.
 
@@ -15,8 +15,10 @@ file that mattered, or it was buried under forty that didn't.
 - **Frame** — turn the task into three to seven checkable questions and pick a
   budget tier before opening anything.
 - **Discover** — climb the cost ladder (structure → paths → text search →
-  structural search → ranged reads → full reads), where each rung costs ~10× the
-  one below. **`rg` for text, `ast-grep` for structure**; `fd` for files by name,
+  structural search → ranged reads → full reads → delegated reads), where each
+  rung costs ~10× the one below — except the last, which costs a subagent's cold
+  start instead, and earns it only when the reading itself is the work.
+  **`rg` for text, `ast-grep` for structure**; `fd` for files by name,
   extension or age; `jq`/`yq` for anything structured. `semgrep` is the one
   escalation off the ladder — the only tool here with dataflow, for whether a
   value *reaches* a sink rather than where a shape appears.
@@ -28,8 +30,8 @@ file that mattered, or it was buried under forty that didn't.
   every claim `verified` / `inferred` / `assumed`, and order stable material
   first so the prefix stays cacheable.
 
-Bundled: **three reading-list scripts** ([below](#the-reading-list-scripts)) that
-collapse the whole narrowing pass into one command for Java, Kotlin, and
+Bundled: **four reading-list scripts** ([below](#the-reading-list-scripts)) that
+collapse the whole narrowing pass into one command for Java, Kotlin, Python, and
 TypeScript repos,
 and a **`.scripts/` convention** — any command worth running twice gets saved as
 a parameterized script instead of retyped with slight variations every pass.
@@ -39,7 +41,9 @@ The body stays under 500 lines; the detail lives in `references/` and loads only
 when needed — [`tool-cookbook.md`](skills/context-builder/references/tool-cookbook.md)
 (tool flags, `ast-grep` gotchas, Semgrep taint mode, fallbacks, `.scripts/`),
 [`discovery-recipes.md`](skills/context-builder/references/discovery-recipes.md)
-(search patterns by question type), and
+(search patterns by question type),
+[`reading-list-scripts.md`](skills/context-builder/references/reading-list-scripts.md)
+(interpreting, narrowing, and troubleshooting a script run), and
 [`pack-templates.md`](skills/context-builder/references/pack-templates.md)
 (delta, handoff, review, and working-set pack variants).
 
@@ -56,6 +60,7 @@ so the reader knows what it is signing up for.
 |---|---|
 | `search-java-sources.py` | `.java` |
 | `search-kotlin-sources.py` | `.kt`, `.kts` |
+| `search-python-sources.py` | `.py`, `.pyi` |
 | `search-ts-sources.py` | `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs` |
 
 Same CLI, same flags, same output; they differ only where the languages do. They
@@ -64,11 +69,12 @@ standalone just as well.
 
 ```bash
 skills/context-builder/scripts/search-java-sources.py <keyword>... [root] \
-  [-n 200] [--depth 5] [--fuzzy 0.8] [--no-tests] [--from-file PATH] [--json]
+  [-n 200] [--depth 5] [--fuzzy 0.8] [--all] [--no-tests] [--from-file PATH] [--json]
 
 # once the skill is installed, the copies on hand are:
 ~/.claude/skills/context-builder/scripts/search-java-sources.py AuthToken ~/work/api
 ~/.claude/skills/context-builder/scripts/search-kotlin-sources.py AuthToken ~/work/api
+~/.claude/skills/context-builder/scripts/search-python-sources.py AuthToken ~/work/api
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py useAuth ~/work/app
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py billing . --no-tests
 ~/.claude/skills/context-builder/scripts/search-ts-sources.py 'vector store' . --json \
@@ -185,7 +191,7 @@ brew install ripgrep fd ast-grep jq yq tree
 Note that ast-grep's binary is `ast-grep`. It also ships an `sg` alias, but that
 one is deprecated and prints a warning on every invocation.
 
-The reading-list scripts need three tree-sitter packages on top of `python3` —
+The reading-list scripts need five tree-sitter packages on top of `python3` —
 they read declarations and import edges from a real parse, and there is no regex
 fallback. Those are not brew packages; `bootstrap.sh` installs them into a venv
 the scripts own, which is [step 2 of installing](#2-install-the-parsers). You do
@@ -284,10 +290,10 @@ needs activating afterwards and it does not matter which shell you run them from
 ~/.claude/skills/context-builder/scripts/bootstrap.sh
 ```
 
-It creates `scripts/.venv`, installs `tree-sitter` and the Java, Kotlin and
-TypeScript grammars from `scripts/requirements.txt`, and verifies they import.
-Re-running it when everything is already in place does nothing; `--force`
-rebuilds the venv from scratch.
+It creates `scripts/.venv`, installs `tree-sitter` and the Java, Kotlin, Python
+and TypeScript grammars from `scripts/requirements.txt`, and verifies they
+import. Re-running it when everything is already in place does nothing;
+`--force` rebuilds the venv from scratch.
 
 The venv is gitignored, so it does not travel with a `git clone` or a `cp -R` —
 run bootstrap on each machine. Skipping this step is not silent: the scripts
@@ -564,7 +570,8 @@ Write two files, because they have different lifespans:
 
 ### Adapting any of them
 
-- **Java, Kotlin, or TS/JS repo** — prepend: *"Run the bundled reading-list script first
+- **Java, Kotlin, Python, or TS/JS repo** — prepend: *"Run the bundled
+  reading-list script first
   (`~/.claude/skills/context-builder/scripts/search-ts-sources.py <keyword>`) and
   triage from its evidence column before opening anything."* That replaces the
   whole manual narrowing pass.
