@@ -47,9 +47,16 @@ verified while writing this:
 | `04-stop-discipline` | The hardest instruction in the skill to make stick: stop after three rounds and ask a question that carries the search, rather than inventing the thing the user named |
 | `05-reading-list-script` | The bundled scripts being documented but not runnable — this case fails if `bootstrap.sh` isn't run when the parsers are missing |
 | `06-budget-adherence` | The two phases nothing else grades: a budget tier stated but not held, and findings reported with no ledger saying which questions are still open |
+| `07-delegates-the-reading` | Rung 7 going through the motions: a subagent spawned with a topic instead of questions, no bound, and no required Findings format — so what comes back is prose the main agent has to verify, or re-read |
 
 01 and 02 are a pair: a description tuned until 01 passes will eventually break
 02. Read their scores together, never one alone.
+
+06 and 07 are a third pair. 06 fails an agent that reads everything in a
+nine-file repo; 07 is the case where bounding the reading is not enough, because
+the files outnumber the window worth spending on them. An agent that answers 06
+by reading less and 07 by delegating has understood the ladder; one that reads
+less in both has just been lucky with fixture size.
 
 02 and 06 are the other pair, and they pull in opposite directions: 02 fails an
 agent that spends a discovery round it didn't need, 06 fails one that reads
@@ -66,6 +73,16 @@ the point: on a fixture this size the with/without delta shows up in the token
 count and the anchor discipline, not in whether the answer was reachable.
 
 `fixtures/shop` contains no circuit breaker, which is what case 04 tests.
+
+`fixtures/warehouse` is the third fixture, and the only one where reading
+everything is not an option: 30 TypeScript sources across 13 directories, with
+the answer in three of them — `config/limits.ts` (`decrementOnReserve`),
+`inventory/reserve.ts` (the decrement it authorises) and `events/handlers.ts`
+(the second decrement on the same order). The other 27 are plausible rather than
+inert: `admin/backfill.ts`, `reporting/stocklevels.ts` and `shipping/dispatch.ts`
+all touch stock, and none of them is on the order path. `shop` and `inventory`
+are small enough that brute force reaches the right answer; this one is not,
+which is what makes case 07's delta legible.
 
 `fixtures/inventory` is the Python counterpart used by case 06 and by
 `score-skill.sh`: nine sources under `src/inventory` with the same planted

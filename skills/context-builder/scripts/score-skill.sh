@@ -86,6 +86,25 @@ else
   check "python structural edges" 1 "script exited non-zero"
 fi
 
+# The delegation fixture earns its place only if narrowing still leaves the
+# three load-bearing files findable among 27 plausible distractors.
+if out=$(./scripts/search-ts-sources.py reservationpolicy evals/fixtures/warehouse 2>&1); then
+  grep -q 'searched 30 sources' <<<"$out" \
+    && grep -q 'config/limits.ts' <<<"$out" \
+    && grep -q 'inventory/reserve.ts' <<<"$out" \
+    && grep -q 'events/handlers.ts' <<<"$out"
+  check "delegation fixture (ts)" $? "30 sources -> the 3 that matter"
+else
+  check "delegation fixture (ts)" 1 "script exited non-zero"
+fi
+
+# --- eval wiring: a case directory with no grader scores nothing, silently.
+ungraded=$(fd -t d -d 1 '^[0-9]' evals 2>/dev/null \
+  | while read -r c; do
+      [[ -f "$c/prompt.md" ]] && compgen -G "$c/graders/*.md" >/dev/null || echo "$c"
+    done)
+[[ -z "$ungraded" ]]; check "every eval case is graded" $? "${ungraded:-all cases have prompt + graders}"
+
 echo
 if [[ "$fails" -eq 0 ]]; then
   echo "all mechanical checks passed — behaviour is scored by: claude plugin eval ."
